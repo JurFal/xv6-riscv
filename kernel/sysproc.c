@@ -105,3 +105,16 @@ sys_uptime(void)
   release(&tickslock);
   return xticks;
 }
+
+uint64
+sys_shutdown(void)
+{
+  printf("System shutdown initiated by user process...\n");
+  printf("Goodbye! xv6 system is shutting down.\n");
+  printf("All processes will be terminated.\n");
+  
+  // Use panic to halt the system
+  panic("System shutdown requested");
+  
+  return 0;  // not reached
+}
