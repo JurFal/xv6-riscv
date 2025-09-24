@@ -80,7 +80,10 @@ void kmem_cache_free(struct kmem_cache *cache, void *obj);
 void* kmalloc(uint size);
 void kfree_slab(void *ptr);
 
-// Initialization function
+// Initialization
 void slab_init(void);
+
+// Testing
+int run_slab_test(int test_type);
 
 #endif // SLAB_H

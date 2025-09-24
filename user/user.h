@@ -25,6 +25,8 @@ char* sys_sbrk(int,int);
 int pause(int);
 int uptime(void);
 int shutdown(void);
+void* slab_alloc(int size);
+int slab_free(void* ptr);
 
 // ulib.c
 int stat(const char*, struct stat*);

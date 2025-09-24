@@ -411,11 +411,16 @@ kmalloc(uint size)
     return 0;
   }
   
+  // For large allocations (>= 2048 bytes), use kalloc directly
+  // This avoids the problem of fitting large objects in a single page
+  if(size >= 2048) {
+    return kalloc();
+  }
+  
   // Find appropriate size class
   int class_idx = find_size_class(size);
   if(class_idx < 0) {
     // Size too large for our size classes, fall back to kalloc
-    // This handles allocations larger than 4096 bytes
     return kalloc();
   }
   
@@ -630,4 +635,118 @@ find_size_class(uint size)
   
   // Size too large for our size classes
   return -1;
+}
+
+// Kernel-space slab test function
+int
+run_slab_test(int test_type)
+{
+  printf("Running slab test type %d\n", test_type);
+  
+  switch(test_type) {
+    case 1: // Basic allocation test
+    {
+      printf("Test 1: Basic allocation test\n");
+      void *ptr1 = kmalloc(64);
+      void *ptr2 = kmalloc(128);
+      void *ptr3 = kmalloc(256);
+      
+      if(ptr1 && ptr2 && ptr3) {
+        printf("  Allocation successful: ptr1=%p, ptr2=%p, ptr3=%p\n", ptr1, ptr2, ptr3);
+        kfree_slab(ptr1);
+        kfree_slab(ptr2);
+        kfree_slab(ptr3);
+        printf("  Deallocation successful\n");
+        return 1;
+      } else {
+        printf("  Allocation failed\n");
+        return 0;
+      }
+    }
+    
+    case 2: // Size classes test
+    {
+      printf("Test 2: Size classes test\n");
+      void *ptrs[8]; // Only test up to 1024 bytes
+      int success = 1;
+      int test_sizes[] = {8, 16, 32, 64, 128, 256, 512, 1024};
+      
+      // Allocate one object from each size class (up to 1024)
+      for(int i = 0; i < 8; i++) {
+        ptrs[i] = kmalloc(test_sizes[i]);
+        if(!ptrs[i]) {
+          printf("  Failed to allocate size %d\n", test_sizes[i]);
+          success = 0;
+          break;
+        }
+        printf("  Allocated size %d: %p\n", test_sizes[i], ptrs[i]);
+      }
+      
+      // Free all allocated objects
+      for(int i = 0; i < 8; i++) {
+        if(ptrs[i]) {
+          kfree_slab(ptrs[i]);
+        }
+      }
+      
+      printf("  Size classes test %s\n", success ? "passed" : "failed");
+      return success;
+    }
+    
+    case 3: // Stress test
+    {
+      printf("Test 3: Stress test\n");
+      void *ptrs[100];
+      int allocated = 0;
+      
+      // Allocate many small objects
+      for(int i = 0; i < 100; i++) {
+        ptrs[i] = kmalloc(64);
+        if(ptrs[i]) {
+          allocated++;
+        }
+      }
+      
+      printf("  Allocated %d/100 objects\n", allocated);
+      
+      // Free all objects
+      for(int i = 0; i < 100; i++) {
+        if(ptrs[i]) {
+          kfree_slab(ptrs[i]);
+        }
+      }
+      
+      printf("  Stress test completed\n");
+      return allocated > 50 ? 1 : 0; // Consider success if we allocated more than 50%
+    }
+    
+    case 4: // Edge cases test
+    {
+      printf("Test 4: Edge cases test\n");
+      
+      // Test zero size allocation
+      void *ptr_zero = kmalloc(0);
+      printf("  Zero size allocation: %p\n", ptr_zero);
+      
+      // Test very large allocation (should fall back to kalloc)
+      void *ptr_large = kmalloc(8192);
+      printf("  Large allocation (8192): %p\n", ptr_large);
+      
+      // Test boundary sizes
+      void *ptr_boundary = kmalloc(4096);
+      printf("  Boundary allocation (4096): %p\n", ptr_boundary);
+      
+      // Clean up
+      if(ptr_zero) kfree_slab(ptr_zero);
+      if(ptr_large) kfree_slab(ptr_large);
+      if(ptr_boundary) kfree_slab(ptr_boundary);
+      
+      printf("  Edge cases test completed\n");
+      return 1;
+    }
+    
+    default:
+      printf("Unknown test type %d\n", test_type);
+      return 0;
+  }
 }
