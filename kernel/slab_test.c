@@ -256,7 +256,9 @@ run_slab_test(int test_type)
       printf("  Allocated %d/100 objects\n", allocated);
       
       // Free all objects
-      for(int i = 0; i < 100; i++) {
+  printf("  Starting to free objects...\n");
+  int free_limit = 100;
+  for(int i = 0; i < free_limit && i < allocated; i++) {
         if(ptrs[i]) {
           kfree_slab(ptrs[i]);
         }
@@ -370,15 +372,25 @@ run_slab_test(int test_type)
       shadow_init();
       test_srand(54321);
       
-      void *ptrs[200];
+      // Allocate arrays on heap to avoid stack overflow
+      void **ptrs = (void**)kalloc();
+      uint *sizes = (uint*)kalloc();
+      if (!ptrs || !sizes) {
+        printf("Test 6: Failed to allocate test arrays\n");
+        if (ptrs) kfree(ptrs);
+        if (sizes) kfree(sizes);
+        return 0;
+      }
+      
       int allocated = 0;
       int freed = 0;
       int pattern_errors = 0;
       int shadow_errors = 0;
       
-      // Initialize arrays
-      for(int i = 0; i < 200; i++) {
+      // Initialize arrays (200 pointers fit in one page)
+      for(int i = 0; i < 200 && i < PGSIZE/sizeof(void*); i++) {
         ptrs[i] = 0;
+        sizes[i] = 0;
       }
       
       // Set arena base
@@ -400,6 +412,7 @@ run_slab_test(int test_type)
             ptrs[idx] = kmalloc(size);
             
             if(ptrs[idx]) {
+              sizes[idx] = size;  // Store the actual allocated size
               allocated++;
               uint64 addr = (uint64)ptrs[idx];
               
@@ -421,7 +434,7 @@ run_slab_test(int test_type)
           int idx = test_rand() % 200;
           if(ptrs[idx]) {
             uint64 addr = (uint64)ptrs[idx];
-            uint size = round_up_pow2(8 + (test_rand() % 1017));
+            uint size = sizes[idx];  // Use the actual allocated size
             
             // Check shadow memory and mark as freed
             if (!shadow_expect_unpoisoned(addr, size)) {
@@ -431,6 +444,7 @@ run_slab_test(int test_type)
             
             kfree_slab(ptrs[idx]);
             ptrs[idx] = 0;
+            sizes[idx] = 0;
             freed++;
           }
         }
@@ -442,7 +456,7 @@ run_slab_test(int test_type)
       for(int i = 0; i < 200; i++) {
         if(ptrs[i]) {
           uint64 addr = (uint64)ptrs[i];
-          uint size = round_up_pow2(8 + (test_rand() % 1017));
+          uint size = sizes[i];  // Use the actual allocated size
           shadow_poison(addr, size);
           kfree_slab(ptrs[i]);
           freed++;
@@ -451,6 +465,11 @@ run_slab_test(int test_type)
       
       printf("\n  Enhanced stress test: allocated=%d, freed=%d, pattern_errors=%d, shadow_errors=%d\n", 
              allocated, freed, pattern_errors, shadow_errors);
+      
+      // Clean up heap-allocated test arrays
+      kfree(ptrs);
+      kfree(sizes);
+      
       return (pattern_errors == 0 && shadow_errors == 0) ? 1 : 0;
     }
     
@@ -517,7 +536,17 @@ run_slab_test(int test_type)
       
       // Simulate concurrent access by rapidly allocating and freeing
       // from different size classes
-      void *ptrs1[50], *ptrs2[50], *ptrs3[50];
+      // Allocate arrays on heap to prevent stack overflow
+      void **ptrs1 = (void**)kalloc();
+      void **ptrs2 = (void**)kalloc();
+      void **ptrs3 = (void**)kalloc();
+      if(!ptrs1 || !ptrs2 || !ptrs3) {
+        printf("  Failed to allocate memory for concurrent test\n");
+        if(ptrs1) kfree(ptrs1);
+        if(ptrs2) kfree(ptrs2);
+        if(ptrs3) kfree(ptrs3);
+        return 0;
+      }
       int errors = 0;
       
       printf("  Simulating concurrent allocations...\n");
@@ -567,6 +596,11 @@ run_slab_test(int test_type)
       printf("  Final stats: %d pages in use, %d bytes allocated\n", 
              stats.total_pages, stats.total_allocated);
       
+      // Clean up heap-allocated arrays
+      kfree(ptrs1);
+      kfree(ptrs2);
+      kfree(ptrs3);
+      
       return errors == 0 ? 1 : 0;
     }
     
@@ -575,7 +609,12 @@ run_slab_test(int test_type)
       printf("Test 10: Memory reclamation test\n");
       
       // Allocate many objects
-      void *ptrs[200];
+      // Allocate ptrs array on heap to prevent stack overflow
+      void **ptrs = (void**)kalloc();
+      if(!ptrs) {
+        printf("  Failed to allocate memory for reclamation test\n");
+        return 0;
+      }
       int allocated = 0;
       
       printf("  Allocating objects...\n");
@@ -615,6 +654,10 @@ run_slab_test(int test_type)
       slab_print_stats();
       
       printf("  Memory reclamation test completed\n");
+      
+      // Clean up heap-allocated ptrs array
+      kfree(ptrs);
+      
       return 1;
     }
     
@@ -624,7 +667,12 @@ run_slab_test(int test_type)
       
       // Simulate process creation/destruction stress
       printf("  Simulating process creation/destruction stress...\n");
-      void *process_ptrs[100];
+      // Allocate process_ptrs array on heap to prevent stack overflow
+      void **process_ptrs = (void**)kalloc();
+      if(!process_ptrs) {
+        printf("  Failed to allocate memory for stress test\n");
+        return 0;
+      }
       int process_errors = 0;
       
       for(int cycle = 0; cycle < 20; cycle++) {
@@ -650,7 +698,12 @@ run_slab_test(int test_type)
         }
         
         // Simulate file operations stress
-        void *file_ptrs[50];
+        // Allocate file_ptrs array on heap to prevent stack overflow
+        void **file_ptrs = (void**)kalloc();
+        if(!file_ptrs) {
+          process_errors++;
+          continue;
+        }
         for(int i = 0; i < 50; i++) {
           // Simulate file structure allocations
           file_ptrs[i] = kmalloc(128);  // Typical file structure size
@@ -663,6 +716,9 @@ run_slab_test(int test_type)
             kfree_slab(file_ptrs[i]);
           }
         }
+        
+        // Clean up heap-allocated file_ptrs array
+        kfree(file_ptrs);
         
         // Free remaining process structures
         for(int i = 1; i < 100; i += 2) {
@@ -701,6 +757,9 @@ run_slab_test(int test_type)
       printf("  Reclaimed %d slabs under stress\n", total_reclaimed);
       printf("  Stress test completed\n");
       
+      // Clean up heap-allocated process_ptrs array
+      kfree(process_ptrs);
+      
       return process_errors < 10 ? 1 : 0;  // Allow some errors under stress
     }
     
@@ -711,7 +770,12 @@ run_slab_test(int test_type)
       // Run a comprehensive test that combines all aspects
       printf("  Running comprehensive allocation patterns...\n");
       
-      void *mixed_ptrs[300];
+      // Allocate mixed_ptrs array on heap to prevent stack overflow
+      void **mixed_ptrs = (void**)kalloc();
+      if(!mixed_ptrs) {
+        printf("  Failed to allocate memory for comprehensive test\n");
+        return 0;
+      }
       int mixed_errors = 0;
       int total_allocated = 0;
       
@@ -795,6 +859,10 @@ run_slab_test(int test_type)
              final_stats.total_pages, final_stats.total_allocated);
       
       printf("  Comprehensive test completed with %d errors\n", mixed_errors);
+      
+      // Clean up heap-allocated mixed_ptrs array
+      kfree(mixed_ptrs);
+      
       return mixed_errors < 5 ? 1 : 0;
     }
     

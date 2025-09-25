@@ -19,8 +19,7 @@ static struct spinlock cache_list_lock;
 // Powers of 2 from 8 bytes to 4096 bytes
 static struct kmem_cache *size_caches[MAX_SIZE_CLASSES]; // 8, 16, 32, 64, ..., 4096
 
-// Static cache structures for different sizes
-static struct kmem_cache size_cache_8;
+// Static cache structures for common sizes
 static struct kmem_cache size_cache_16;
 static struct kmem_cache size_cache_32;
 static struct kmem_cache size_cache_64;
@@ -30,13 +29,14 @@ static struct kmem_cache size_cache_512;
 static struct kmem_cache size_cache_1024;
 static struct kmem_cache size_cache_2048;
 static struct kmem_cache size_cache_4096;
+static struct kmem_cache size_cache_8192;
 
 // Cache for cache descriptors themselves (bootstrap)
 static struct kmem_cache cache_cache;
 
 // Size classes array definition
 const uint slab_size_classes[MAX_SIZE_CLASSES] = {
-  8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096
+  16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192
 };
 
 // Internal helper functions
@@ -75,20 +75,20 @@ slab_init(void)
   cache_cache.colour_next = 0;
   
   // Create size caches for kmalloc
-  // Powers of 2 from 8 bytes to 4096 bytes
-  uint sizes[] = {8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096};
+  // Powers of 2 from 16 bytes to 8192 bytes
+  uint sizes[] = {16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192};
   struct kmem_cache *static_caches[] = {
-    &size_cache_8, &size_cache_16, &size_cache_32, &size_cache_64,
+    &size_cache_16, &size_cache_32, &size_cache_64,
     &size_cache_128, &size_cache_256, &size_cache_512, &size_cache_1024,
-    &size_cache_2048, &size_cache_4096
+    &size_cache_2048, &size_cache_4096, &size_cache_8192
   };
   
   for(int i = 0; i < 10; i++) {
     struct kmem_cache *cache = static_caches[i];
     
     // Initialize cache name
-    char *names[] = {"size-8", "size-16", "size-32", "size-64", "size-128",
-                     "size-256", "size-512", "size-1024", "size-2048", "size-4096"};
+    char *names[] = {"size-16", "size-32", "size-64", "size-128",
+                     "size-256", "size-512", "size-1024", "size-2048", "size-4096", "size-8192"};
     strncpy(cache->name, names[i], sizeof(cache->name));
     
     // Initialize cache fields
@@ -149,6 +149,11 @@ kmem_cache_create(const char *name, uint size, uint align,
   cache->name[sizeof(cache->name) - 1] = '\0';
   
   // 3. Calculate aligned object size
+  // Ensure object size is at least pointer size for freelist management
+  uint min_size = sizeof(void*);
+  if(size < min_size) {
+    size = min_size;
+  }
   cache->objsize = align_up(size, align);
   cache->align = align;
   
@@ -266,7 +271,7 @@ kmem_cache_alloc(struct kmem_cache *cache)
       cache->active_objs++;
       
       // If slab becomes full, move it to full list
-      if(cache->partial->nr_free == 0) {
+      if(cache->partial && cache->partial->nr_free == 0) {
         struct slab *full_slab = cache->partial;
         cache->partial = cache->partial->next;
         full_slab->next = cache->full;
@@ -335,27 +340,29 @@ kmem_cache_free(struct kmem_cache *cache, void *obj)
   // 1. Find which slab the object belongs to
   // We need to search through all slab lists
   struct slab *slab = 0;
-  struct slab **prev_ptr = 0;
+  int slab_list = -1; // 0=partial, 1=full
   
   // Search in partial list
-  prev_ptr = &cache->partial;
   for(struct slab *s = cache->partial; s; s = s->next) {
-    if((char*)obj >= (char*)s->mem && (char*)obj < (char*)s->mem + PGSIZE) {
+    char *obj_start = (char*)s->mem;
+    char *obj_end = obj_start + (s->nr_objs * cache->objsize);
+    if((char*)obj >= obj_start && (char*)obj < obj_end) {
       slab = s;
+      slab_list = 0;
       break;
     }
-    prev_ptr = &s->next;
   }
   
   // Search in full list if not found in partial
   if(!slab) {
-    prev_ptr = &cache->full;
     for(struct slab *s = cache->full; s; s = s->next) {
-      if((char*)obj >= (char*)s->mem && (char*)obj < (char*)s->mem + PGSIZE) {
+      char *obj_start = (char*)s->mem;
+      char *obj_end = obj_start + (s->nr_objs * cache->objsize);
+      if((char*)obj >= obj_start && (char*)obj < obj_end) {
         slab = s;
+        slab_list = 1;
         break;
       }
-      prev_ptr = &s->next;
     }
   }
   
@@ -373,7 +380,34 @@ kmem_cache_free(struct kmem_cache *cache, void *obj)
   // 3. Update slab lists as needed
   if(slab->nr_free == slab->nr_objs) {
     // Slab is now empty - move to empty list
-    *prev_ptr = slab->next;  // Remove from current list
+    // Remove from current list
+    if(slab_list == 0) {
+      // Remove from partial list
+      if(cache->partial == slab) {
+        cache->partial = slab->next;
+      } else {
+        for(struct slab *s = cache->partial; s; s = s->next) {
+          if(s->next == slab) {
+            s->next = slab->next;
+            break;
+          }
+        }
+      }
+    } else if(slab_list == 1) {
+      // Remove from full list
+      if(cache->full == slab) {
+        cache->full = slab->next;
+      } else {
+        for(struct slab *s = cache->full; s; s = s->next) {
+          if(s->next == slab) {
+            s->next = slab->next;
+            break;
+          }
+        }
+      }
+    }
+    
+    // Add to empty list
     slab->next = cache->empty;
     cache->empty = slab;
     
@@ -394,12 +428,30 @@ kmem_cache_free(struct kmem_cache *cache, void *obj)
       // Update cache statistics
        cache->total_slabs--;
       
+      // Release lock before destroying slab to avoid deadlock
+      release(&cache->lock);
+      
       // Destroy the slab (this will call kfree on the memory)
       slab_destroy(to_destroy);
+      
+      // Return early since we already released the lock
+      return;
     }
-  } else if(was_full) {
+  } else if(was_full && slab_list == 1) {
     // Slab was full but now has free space - move to partial list
-    *prev_ptr = slab->next;  // Remove from full list
+    // Remove from full list
+    if(cache->full == slab) {
+      cache->full = slab->next;
+    } else {
+      for(struct slab *s = cache->full; s; s = s->next) {
+        if(s->next == slab) {
+          s->next = slab->next;
+          break;
+        }
+      }
+    }
+    
+    // Add to partial list
     slab->next = cache->partial;
     cache->partial = slab;
   }
@@ -441,7 +493,7 @@ kmalloc(uint size)
     void *obj = slab_alloc_obj(cache->partial);
     if(obj) {
       // If slab becomes full, move it to full list
-      if(cache->partial->nr_free == 0) {
+      if(cache->partial && cache->partial->nr_free == 0) {
         struct slab *full_slab = cache->partial;
         cache->partial = cache->partial->next;
         full_slab->next = cache->full;
@@ -483,9 +535,22 @@ find_object_cache(void *ptr, struct slab **found_slab)
     // Search in all slab lists (partial, full, empty)
     struct slab *lists[] = {cache->partial, cache->full, cache->empty};
     for(int j = 0; j < 3; j++) {
+      int slab_count = 0;
       for(struct slab *slab = lists[j]; slab; slab = slab->next) {
-        if((char*)ptr >= (char*)slab->mem && 
-           (char*)ptr < (char*)slab->mem + PGSIZE) {
+        slab_count++;
+        if(slab_count > 50) {  // Prevent infinite loops
+          break;
+        }
+        
+        // Basic slab validity check
+        if(slab->mem == 0 || slab->cache != cache) {
+          continue;
+        }
+        
+        // Check if pointer is within the object area of this slab
+        char *obj_start = (char*)slab->mem;
+        char *obj_end = obj_start + (slab->nr_objs * cache->objsize);
+        if((char*)ptr >= obj_start && (char*)ptr < obj_end) {
           // Found the slab containing this object
           *found_slab = slab;
           release(&cache->lock);
@@ -539,27 +604,40 @@ slab_create(struct kmem_cache *cache)
   // Use the beginning of the page for the slab structure
   struct slab *slab = (struct slab*)page;
   
+  // Objects start after the slab structure, aligned properly
+  char *obj_start = (char*)page + sizeof(struct slab);
+  // Align to cache alignment boundary
+  uint alignment = cache->align > 0 ? cache->align : sizeof(void*);
+  uint64 addr = (uint64)obj_start;
+  addr = (addr + alignment - 1) & ~(alignment - 1);
+  obj_start = (char*)addr;
+  
+  // Calculate how many objects can fit in the remaining space
+  uint available_space = PGSIZE - (obj_start - (char*)page);
+  uint nr_objs = available_space / cache->objsize;
+  
   // Initialize slab structure
   slab->cache = cache;
-  slab->mem = page;
-  slab->nr_objs = (PGSIZE - align_up(sizeof(struct slab), cache->align)) / cache->objsize;
-  slab->nr_free = slab->nr_objs;
+  slab->mem = obj_start;  // Objects start after slab structure
+  slab->nr_objs = nr_objs;
+  slab->nr_free = nr_objs;
   slab->freelist = 0; // Will be set up below
   
   // Set up freelist - simple linked list of free objects
-  // Objects start after the slab structure
-  char *obj_start = (char*)page + align_up(sizeof(struct slab), cache->align);
-  char *obj = obj_start;
-  
-  // Link all objects in the freelist
-  for(uint i = 0; i < slab->nr_objs - 1; i++) {
-    *(void**)obj = obj + cache->objsize;
-    obj += cache->objsize;
+  if(nr_objs > 0) {
+    char *obj = obj_start;
+    slab->freelist = (void**)obj_start;  // First object is head of freelist
+    
+    // Link all objects in the freelist
+    for(uint i = 0; i < nr_objs - 1; i++) {
+      *(void**)obj = obj + cache->objsize;
+      obj += cache->objsize;
+    }
+    // Last object points to null
+    *(void**)obj = 0;
+  } else {
+    slab->freelist = 0;
   }
-  // Last object points to null
-  *(void**)obj = 0;
-  
-  slab->freelist = (void**)obj_start;
   
   return slab;
 }
@@ -572,8 +650,8 @@ slab_destroy(struct slab *slab)
     return;
   }
   
-  // Free the page
-  kfree(slab->mem);
+  // Free the entire page (slab structure is at the beginning of the page)
+  kfree((void*)slab);
 }
 
 // Internal helper: Allocate one object from a slab
@@ -591,7 +669,7 @@ slab_alloc_obj(struct slab *slab)
   }
   
   // Update freelist to next free object
-  slab->freelist = *(slab->freelist);
+  slab->freelist = (void**)(*(void**)obj);
   slab->nr_free--;
   
   // Call constructor if present
@@ -610,14 +688,30 @@ slab_free_obj(struct slab *slab, void *obj)
     return;
   }
   
+  // Validate object is within slab bounds
+  char *obj_start = (char*)slab->mem;
+  char *obj_end = obj_start + (slab->nr_objs * slab->cache->objsize);
+  if((char*)obj < obj_start || (char*)obj >= obj_end) {
+    printf("slab_free_obj: object %p out of bounds [%p, %p)\n", obj, obj_start, obj_end);
+    panic("slab_free_obj: invalid object");
+  }
+  
+  // Check alignment
+  uint64 offset = (char*)obj - obj_start;
+  if(offset % slab->cache->objsize != 0) {
+    printf("slab_free_obj: object %p not aligned (offset=%d, objsize=%d)\n", 
+           obj, (int)offset, slab->cache->objsize);
+    panic("slab_free_obj: misaligned object");
+  }
+  
   // Call destructor if present
   if(slab->cache->dtor) {
     slab->cache->dtor(obj);
   }
   
   // Add object back to freelist
-  *(void**)obj = slab->freelist;
-  slab->freelist = obj;
+  *(void**)obj = (void*)slab->freelist;
+  slab->freelist = (void**)obj;
   slab->nr_free++;
 }
 
@@ -726,19 +820,9 @@ perf_test_slab_vs_kalloc(int num_allocs, int obj_size)
   
   void **ptrs = (void**)kalloc();  // Use one page to store pointers
   if(!ptrs) {
-    printf("Failed to allocate pointer array\n");
+    printf("Failed to allocate memory for performance test\n");
     return;
   }
-  
-  int max_ptrs = PGSIZE / sizeof(void*);
-  if(num_allocs > max_ptrs) {
-    num_allocs = max_ptrs;
-    printf("Limiting allocations to %d due to pointer array size\n", num_allocs);
-  }
-  
-  // Get initial memory stats
-  struct slab_global_stats initial_slab_stats, final_slab_stats;
-  slab_get_global_stats(&initial_slab_stats);
   
   // Test 1: Slab allocator performance
   printf("Testing Slab Allocator:\n");
@@ -763,20 +847,22 @@ perf_test_slab_vs_kalloc(int num_allocs, int obj_size)
   }
   
   uint64 slab_end_time = r_time();
-  slab_get_global_stats(&final_slab_stats);
   
   // Calculate slab performance metrics
   uint64 slab_alloc_cycles = slab_alloc_time - slab_start_time;
   uint64 slab_total_cycles = slab_end_time - slab_start_time;
-  uint slab_memory_used = final_slab_stats.total_pages - initial_slab_stats.total_pages;
   
   printf("  Successful allocations: %d/%d\n", slab_successful_allocs, num_allocs);
   printf("  Allocation time: %ld cycles\n", slab_alloc_cycles);
   printf("  Total time: %ld cycles\n", slab_total_cycles);
-  printf("  Memory pages used: %d\n", slab_memory_used);
   printf("  Allocation throughput: %ld allocs/cycle\n", 
          slab_alloc_cycles > 0 ? (slab_successful_allocs * 1000) / slab_alloc_cycles : 0);
   printf("\n");
+  
+  // Clear pointer array before second test
+  for(int i = 0; i < num_allocs; i++) {
+    ptrs[i] = 0;
+  }
   
   // Test 2: Kalloc performance (direct page allocation)
   printf("Testing Kalloc (direct page allocation):\n");
@@ -822,31 +908,9 @@ perf_test_slab_vs_kalloc(int num_allocs, int obj_size)
            (slab_alloc_cycles * 100) / kalloc_alloc_cycles);
   }
   
-  if(kalloc_memory_used > 0) {
-    printf("  Memory efficiency (slab/kalloc): %d%%\n", 
-           (uint)((slab_memory_used * 100) / kalloc_memory_used));
-    printf("  Memory savings: %d pages (%d KB)\n", 
-           kalloc_memory_used - slab_memory_used,
-           (kalloc_memory_used - slab_memory_used) * 4);
-  }
-  
-  // Calculate waste for small objects
-  if(obj_size < PGSIZE) {
-    uint slab_waste_per_obj = 0; // Slab has minimal waste for small objects
-    uint kalloc_waste_per_obj = PGSIZE - obj_size;
-    uint total_kalloc_waste = kalloc_waste_per_obj * kalloc_successful_allocs;
-    
-    printf("  Waste per object: slab=%d bytes, kalloc=%d bytes\n", 
-           slab_waste_per_obj, kalloc_waste_per_obj);
-    printf("  Total waste: kalloc=%d bytes (%d KB)\n", 
-           total_kalloc_waste, total_kalloc_waste / 1024);
-    printf("  Waste reduction: %d%%\n", 
-           kalloc_waste_per_obj > 0 ? 100 - (slab_waste_per_obj * 100) / kalloc_waste_per_obj : 0);
-  }
-  
   printf("\n");
   
-  // Clean up
+  // Clean up heap-allocated ptrs array
   kfree(ptrs);
 }
 
