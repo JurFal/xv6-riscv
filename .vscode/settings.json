@@ -1,6 +1,7 @@
 {
     "files.associations": {
         "*.dbclient-js": "javascript",
-        "user.h": "c"
+        "user.h": "c",
+        "slab_stats.h": "c"
     }
 }

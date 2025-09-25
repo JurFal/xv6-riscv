@@ -80,6 +80,64 @@ void kmem_cache_free(struct kmem_cache *cache, void *obj);
 void* kmalloc(uint size);
 void kfree_slab(void *ptr);
 
+// Statistics structures
+struct slab_cache_stats {
+  char name[32];           // Cache name
+  uint objsize;            // Object size
+  uint nr_slabs;           // Total number of slabs
+  uint nr_objs;            // Total number of objects
+  uint nr_free;            // Number of free objects
+  uint pages_in_use;       // Number of pages in use
+  uint allocated_bytes;    // Total allocated bytes
+  uint total_bytes;        // Total bytes (including free space)
+  uint fragmentation_pct;  // Fragmentation percentage (0-100)
+};
+
+struct slab_global_stats {
+  uint total_caches;       // Number of active caches
+  uint total_pages;        // Total pages used by slab allocator
+  uint total_allocated;    // Total allocated bytes across all caches
+  uint total_free;         // Total free bytes across all caches
+  uint global_fragmentation_pct; // Global fragmentation percentage
+};
+
+// Statistics and monitoring functions
+void slab_print_stats(void);
+void slab_get_cache_stats(struct kmem_cache *cache, struct slab_cache_stats *stats);
+void slab_get_global_stats(struct slab_global_stats *stats);
+int slab_reclaim_empty_slabs(struct kmem_cache *cache, int max_reclaim);
+
+// Fragmentation analysis functions
+struct fragmentation_analysis {
+  uint internal_fragmentation_pct;  // Unused space within allocated pages
+  uint external_fragmentation_pct;  // Free space that cannot be used
+  uint utilization_pct;             // Actual usage efficiency
+  uint wasted_bytes;                // Total wasted bytes
+  uint optimal_pages;               // Theoretical minimum pages needed
+  uint actual_pages;                // Actual pages in use
+};
+
+void slab_analyze_fragmentation(struct kmem_cache *cache, struct fragmentation_analysis *analysis);
+void slab_print_fragmentation_report(void);
+
+// Performance comparison functions
+struct perf_stats {
+  uint64 start_time;
+  uint64 end_time;
+  uint allocations;
+  uint deallocations;
+  uint memory_used;
+  uint peak_memory;
+};
+
+void perf_test_slab_vs_kalloc(int num_allocs, int obj_size);
+
+// Helper functions for testing
+int slab_get_num_caches(void);
+struct kmem_cache* slab_get_cache(int index);
+void slab_acquire_cache_list_lock(void);
+void slab_release_cache_list_lock(void);
+
 // Initialization
 void slab_init(void);
 

@@ -8,6 +8,7 @@
 #include "riscv.h"
 #include "defs.h"
 #include "slab.h"
+#include "slab_stats.h"
 
 // Global cache management
 static struct kmem_cache *caches[MAX_CACHES];
@@ -50,8 +51,11 @@ static uint align_up(uint size, uint alignment);
 void
 slab_init(void)
 {
+  printf("slab_init: Starting slab initialization\n");
+  
   // Initialize the cache list lock
   initlock(&cache_list_lock, "cache_list");
+  printf("slab_init: Cache list lock initialized\n");
   
   // Initialize the cache_cache for bootstrap
   // This cache is used to allocate other cache structures
@@ -119,6 +123,8 @@ slab_init(void)
     caches[num_caches] = &cache_cache;
     num_caches++;
   }
+  
+  printf("slab_init: Initialization completed, num_caches = %d\n", num_caches);
 }
 
 // Create a new cache for objects of specified size and alignment
@@ -579,13 +585,13 @@ slab_alloc_obj(struct slab *slab)
   }
   
   // Get object from freelist
-  void *obj = slab->freelist;
+  void *obj = (void*)slab->freelist;
   if(obj == 0) {
     return 0;
   }
   
   // Update freelist to next free object
-  slab->freelist = *(void**)obj;
+  slab->freelist = *(slab->freelist);
   slab->nr_free--;
   
   // Call constructor if present
@@ -635,4 +641,244 @@ find_size_class(uint size)
   
   // Size too large for our size classes
   return -1;
+}
+
+// Statistics and monitoring functions implementation
+
+// Count slabs in a list
+static uint
+count_slabs_in_list(struct slab *head)
+{
+  uint count = 0;
+  struct slab *slab = head;
+  while(slab) {
+    count++;
+    slab = slab->next;
+  }
+  return count;
+}
+
+
+
+
+
+
+
+
+
+// Reclaim empty slabs to reduce memory usage
+int
+slab_reclaim_empty_slabs(struct kmem_cache *cache, int max_reclaim)
+{
+  if(!cache || max_reclaim <= 0) {
+    return 0;
+  }
+  
+  int reclaimed = 0;
+  
+  acquire(&cache->lock);
+  
+  struct slab *prev = 0;
+  struct slab *slab = cache->empty;
+  
+  while(slab && reclaimed < max_reclaim) {
+    struct slab *next = slab->next;
+    
+    // Only reclaim if we have more than the threshold
+    uint empty_count = count_slabs_in_list(cache->empty);
+    if(empty_count > EMPTY_SLAB_THRESHOLD) {
+      // Remove from empty list
+      if(prev) {
+        prev->next = next;
+      } else {
+        cache->empty = next;
+      }
+      
+      // Free the slab memory
+      kfree(slab->mem);
+      kfree(slab);
+      
+      cache->total_slabs--;
+      reclaimed++;
+    } else {
+      prev = slab;
+    }
+    
+    slab = next;
+  }
+  
+  release(&cache->lock);
+  
+  return reclaimed;
+}
+
+
+
+
+
+// Performance comparison: slab vs kalloc
+void
+perf_test_slab_vs_kalloc(int num_allocs, int obj_size)
+{
+  printf("=== Performance Test: Slab vs Kalloc ===\n");
+  printf("Test parameters: %d allocations of %d bytes each\n", num_allocs, obj_size);
+  printf("\n");
+  
+  void **ptrs = (void**)kalloc();  // Use one page to store pointers
+  if(!ptrs) {
+    printf("Failed to allocate pointer array\n");
+    return;
+  }
+  
+  int max_ptrs = PGSIZE / sizeof(void*);
+  if(num_allocs > max_ptrs) {
+    num_allocs = max_ptrs;
+    printf("Limiting allocations to %d due to pointer array size\n", num_allocs);
+  }
+  
+  // Get initial memory stats
+  struct slab_global_stats initial_slab_stats, final_slab_stats;
+  slab_get_global_stats(&initial_slab_stats);
+  
+  // Test 1: Slab allocator performance
+  printf("Testing Slab Allocator:\n");
+  uint64 slab_start_time = r_time();
+  
+  // Allocation phase
+  int slab_successful_allocs = 0;
+  for(int i = 0; i < num_allocs; i++) {
+    ptrs[i] = kmalloc(obj_size);
+    if(ptrs[i]) {
+      slab_successful_allocs++;
+    }
+  }
+  
+  uint64 slab_alloc_time = r_time();
+  
+  // Deallocation phase
+  for(int i = 0; i < slab_successful_allocs; i++) {
+    if(ptrs[i]) {
+      kfree_slab(ptrs[i]);
+    }
+  }
+  
+  uint64 slab_end_time = r_time();
+  slab_get_global_stats(&final_slab_stats);
+  
+  // Calculate slab performance metrics
+  uint64 slab_alloc_cycles = slab_alloc_time - slab_start_time;
+  uint64 slab_total_cycles = slab_end_time - slab_start_time;
+  uint slab_memory_used = final_slab_stats.total_pages - initial_slab_stats.total_pages;
+  
+  printf("  Successful allocations: %d/%d\n", slab_successful_allocs, num_allocs);
+  printf("  Allocation time: %ld cycles\n", slab_alloc_cycles);
+  printf("  Total time: %ld cycles\n", slab_total_cycles);
+  printf("  Memory pages used: %d\n", slab_memory_used);
+  printf("  Allocation throughput: %ld allocs/cycle\n", 
+         slab_alloc_cycles > 0 ? (slab_successful_allocs * 1000) / slab_alloc_cycles : 0);
+  printf("\n");
+  
+  // Test 2: Kalloc performance (direct page allocation)
+  printf("Testing Kalloc (direct page allocation):\n");
+  uint64 kalloc_start_time = r_time();
+  
+  // Allocation phase
+  int kalloc_successful_allocs = 0;
+  for(int i = 0; i < num_allocs; i++) {
+    ptrs[i] = kalloc();  // Always allocates full page
+    if(ptrs[i]) {
+      kalloc_successful_allocs++;
+    }
+  }
+  
+  uint64 kalloc_alloc_time = r_time();
+  
+  // Deallocation phase
+  for(int i = 0; i < kalloc_successful_allocs; i++) {
+    if(ptrs[i]) {
+      kfree(ptrs[i]);
+    }
+  }
+  
+  uint64 kalloc_end_time = r_time();
+  
+  // Calculate kalloc performance metrics
+  uint64 kalloc_alloc_cycles = kalloc_alloc_time - kalloc_start_time;
+  uint64 kalloc_total_cycles = kalloc_end_time - kalloc_start_time;
+  uint kalloc_memory_used = kalloc_successful_allocs; // Each allocation is 1 page
+  
+  printf("  Successful allocations: %d/%d\n", kalloc_successful_allocs, num_allocs);
+  printf("  Allocation time: %ld cycles\n", kalloc_alloc_cycles);
+  printf("  Total time: %ld cycles\n", kalloc_total_cycles);
+  printf("  Memory pages used: %d\n", kalloc_memory_used);
+  printf("  Allocation throughput: %ld allocs/cycle\n", 
+         kalloc_alloc_cycles > 0 ? (kalloc_successful_allocs * 1000) / kalloc_alloc_cycles : 0);
+  printf("\n");
+  
+  // Performance comparison
+  printf("Performance Comparison:\n");
+  if(slab_alloc_cycles > 0 && kalloc_alloc_cycles > 0) {
+    printf("  Speed ratio (slab/kalloc): %ld%%\n", 
+           (slab_alloc_cycles * 100) / kalloc_alloc_cycles);
+  }
+  
+  if(kalloc_memory_used > 0) {
+    printf("  Memory efficiency (slab/kalloc): %d%%\n", 
+           (uint)((slab_memory_used * 100) / kalloc_memory_used));
+    printf("  Memory savings: %d pages (%d KB)\n", 
+           kalloc_memory_used - slab_memory_used,
+           (kalloc_memory_used - slab_memory_used) * 4);
+  }
+  
+  // Calculate waste for small objects
+  if(obj_size < PGSIZE) {
+    uint slab_waste_per_obj = 0; // Slab has minimal waste for small objects
+    uint kalloc_waste_per_obj = PGSIZE - obj_size;
+    uint total_kalloc_waste = kalloc_waste_per_obj * kalloc_successful_allocs;
+    
+    printf("  Waste per object: slab=%d bytes, kalloc=%d bytes\n", 
+           slab_waste_per_obj, kalloc_waste_per_obj);
+    printf("  Total waste: kalloc=%d bytes (%d KB)\n", 
+           total_kalloc_waste, total_kalloc_waste / 1024);
+    printf("  Waste reduction: %d%%\n", 
+           kalloc_waste_per_obj > 0 ? 100 - (slab_waste_per_obj * 100) / kalloc_waste_per_obj : 0);
+  }
+  
+  printf("\n");
+  
+  // Clean up
+  kfree(ptrs);
+}
+
+// Helper functions for testing
+int
+slab_get_num_caches(void)
+{
+  return num_caches;
+}
+
+struct kmem_cache*
+slab_get_cache(int index)
+{
+  if(index < 0 || index >= num_caches)
+    return 0;
+  return caches[index];
+}
+
+void
+slab_acquire_cache_list_lock(void)
+{
+  acquire(&cache_list_lock);
+}
+
+void
+slab_release_cache_list_lock(void)
+{
+  release(&cache_list_lock);
+}
+
+uint
+slab_count_slabs_in_list(struct slab *head)
+{
+  return count_slabs_in_list(head);
 }

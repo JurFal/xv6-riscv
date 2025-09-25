@@ -10,7 +10,7 @@ int main(int argc, char *argv[]) {
     int passed_tests = 0;
     
     // Run kernel-space slab tests
-    int max_tests = 6;  // Now we have 6 tests
+    int max_tests = 12;  // Now we have 12 tests
     if (argc > 1) {
         // If argument provided, run specific test
         int specific_test = atoi(argv[1]);
