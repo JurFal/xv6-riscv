@@ -83,7 +83,4 @@ void kfree_slab(void *ptr);
 // Initialization
 void slab_init(void);
 
-// Testing
-int run_slab_test(int test_type);
-
 #endif // SLAB_H

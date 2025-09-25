@@ -7,6 +7,7 @@
 #include "proc.h"
 #include "vm.h"
 #include "slab.h"
+#include "slab_test.h"
 
 uint64
 sys_exit(void)

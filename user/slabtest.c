@@ -10,7 +10,27 @@ int main(int argc, char *argv[]) {
     int passed_tests = 0;
     
     // Run kernel-space slab tests
-    for (int test_type = 1; test_type <= 4; test_type++) {
+    int max_tests = 6;  // Now we have 6 tests
+    if (argc > 1) {
+        // If argument provided, run specific test
+        int specific_test = atoi(argv[1]);
+        if (specific_test >= 1 && specific_test <= max_tests) {
+            total_tests = 1;
+            printf("Running specific test %d...\n", specific_test);
+            int result = (int)(uint64)slab_alloc(specific_test);
+            if (result > 0) {
+                passed_tests++;
+                printf("Test %d: PASSED\n\n", specific_test);
+            } else {
+                printf("Test %d: FAILED\n\n", specific_test);
+            }
+        } else {
+            printf("Invalid test number. Valid range: 1-%d\n", max_tests);
+            exit(1);
+        }
+    } else {
+        // Run all tests
+        for (int test_type = 1; test_type <= max_tests; test_type++) {
         total_tests++;
         printf("Running test %d...\n", test_type);
         
@@ -21,6 +41,7 @@ int main(int argc, char *argv[]) {
         } else {
             printf("Test %d: FAILED\n\n", test_type);
         }
+    }
     }
     
     printf("Test Results: %d/%d tests passed\n", passed_tests, total_tests);
