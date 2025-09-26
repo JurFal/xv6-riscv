@@ -1,7 +1,7 @@
 #ifndef SLAB_STATS_H
 #define SLAB_STATS_H
 
-#include "types.h"
+#include "../types.h"
 
 // Statistics structures
 struct slab_cache_stats {

@@ -8,7 +8,8 @@
 #include "riscv.h"
 #include "defs.h"
 #include "slab.h"
-#include "slab_stats.h"
+#include "test_slab/slab_stats.h"
+#include "test_slab/baseline.h"
 
 // Global cache management
 static struct kmem_cache *caches[MAX_CACHES];
@@ -752,14 +753,6 @@ count_slabs_in_list(struct slab *head)
   return count;
 }
 
-
-
-
-
-
-
-
-
 // Reclaim empty slabs to reduce memory usage
 int
 slab_reclaim_empty_slabs(struct kmem_cache *cache, int max_reclaim)
@@ -804,114 +797,6 @@ slab_reclaim_empty_slabs(struct kmem_cache *cache, int max_reclaim)
   release(&cache->lock);
   
   return reclaimed;
-}
-
-
-
-
-
-// Performance comparison: slab vs kalloc
-void
-perf_test_slab_vs_kalloc(int num_allocs, int obj_size)
-{
-  printf("=== Performance Test: Slab vs Kalloc ===\n");
-  printf("Test parameters: %d allocations of %d bytes each\n", num_allocs, obj_size);
-  printf("\n");
-  
-  void **ptrs = (void**)kalloc();  // Use one page to store pointers
-  if(!ptrs) {
-    printf("Failed to allocate memory for performance test\n");
-    return;
-  }
-  
-  // Test 1: Slab allocator performance
-  printf("Testing Slab Allocator:\n");
-  uint64 slab_start_time = r_time();
-  
-  // Allocation phase
-  int slab_successful_allocs = 0;
-  for(int i = 0; i < num_allocs; i++) {
-    ptrs[i] = kmalloc(obj_size);
-    if(ptrs[i]) {
-      slab_successful_allocs++;
-    }
-  }
-  
-  uint64 slab_alloc_time = r_time();
-  
-  // Deallocation phase
-  for(int i = 0; i < slab_successful_allocs; i++) {
-    if(ptrs[i]) {
-      kfree_slab(ptrs[i]);
-    }
-  }
-  
-  uint64 slab_end_time = r_time();
-  
-  // Calculate slab performance metrics
-  uint64 slab_alloc_cycles = slab_alloc_time - slab_start_time;
-  uint64 slab_total_cycles = slab_end_time - slab_start_time;
-  
-  printf("  Successful allocations: %d/%d\n", slab_successful_allocs, num_allocs);
-  printf("  Allocation time: %ld cycles\n", slab_alloc_cycles);
-  printf("  Total time: %ld cycles\n", slab_total_cycles);
-  printf("  Allocation throughput: %ld allocs/cycle\n", 
-         slab_alloc_cycles > 0 ? (slab_successful_allocs * 1000) / slab_alloc_cycles : 0);
-  printf("\n");
-  
-  // Clear pointer array before second test
-  for(int i = 0; i < num_allocs; i++) {
-    ptrs[i] = 0;
-  }
-  
-  // Test 2: Kalloc performance (direct page allocation)
-  printf("Testing Kalloc (direct page allocation):\n");
-  uint64 kalloc_start_time = r_time();
-  
-  // Allocation phase
-  int kalloc_successful_allocs = 0;
-  for(int i = 0; i < num_allocs; i++) {
-    ptrs[i] = kalloc();  // Always allocates full page
-    if(ptrs[i]) {
-      kalloc_successful_allocs++;
-    }
-  }
-  
-  uint64 kalloc_alloc_time = r_time();
-  
-  // Deallocation phase
-  for(int i = 0; i < kalloc_successful_allocs; i++) {
-    if(ptrs[i]) {
-      kfree(ptrs[i]);
-    }
-  }
-  
-  uint64 kalloc_end_time = r_time();
-  
-  // Calculate kalloc performance metrics
-  uint64 kalloc_alloc_cycles = kalloc_alloc_time - kalloc_start_time;
-  uint64 kalloc_total_cycles = kalloc_end_time - kalloc_start_time;
-  uint kalloc_memory_used = kalloc_successful_allocs; // Each allocation is 1 page
-  
-  printf("  Successful allocations: %d/%d\n", kalloc_successful_allocs, num_allocs);
-  printf("  Allocation time: %ld cycles\n", kalloc_alloc_cycles);
-  printf("  Total time: %ld cycles\n", kalloc_total_cycles);
-  printf("  Memory pages used: %d\n", kalloc_memory_used);
-  printf("  Allocation throughput: %ld allocs/cycle\n", 
-         kalloc_alloc_cycles > 0 ? (kalloc_successful_allocs * 1000) / kalloc_alloc_cycles : 0);
-  printf("\n");
-  
-  // Performance comparison
-  printf("Performance Comparison:\n");
-  if(slab_alloc_cycles > 0 && kalloc_alloc_cycles > 0) {
-    printf("  Speed ratio (slab/kalloc): %ld%%\n", 
-           (slab_alloc_cycles * 100) / kalloc_alloc_cycles);
-  }
-  
-  printf("\n");
-  
-  // Clean up heap-allocated ptrs array
-  kfree(ptrs);
 }
 
 // Helper functions for testing

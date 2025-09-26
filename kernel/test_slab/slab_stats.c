@@ -1,10 +1,10 @@
-#include "types.h"
-#include "param.h"
-#include "memlayout.h"
-#include "spinlock.h"
-#include "riscv.h"
-#include "defs.h"
-#include "slab.h"
+#include "../types.h"
+#include "../param.h"
+#include "../memlayout.h"
+#include "../spinlock.h"
+#include "../riscv.h"
+#include "../defs.h"
+#include "../slab.h"
 #include "slab_stats.h"
 
 // Use accessor functions instead of direct access to static variables
@@ -134,8 +134,7 @@ slab_print_stats(void)
   printf("\n");
   
   printf("Per-Cache Stats:\n");
-  printf("%-12s %8s %6s %6s %6s %6s %8s %8s %5s\n",
-         "Name", "ObjSize", "Slabs", "Objs", "Free", "Pages", "Alloc", "Total", "Frag%");
+  printf("Name\t\tObjSize\tSlabs\tObjs\tFree\tPages\tAlloc\tTotal\tFrag%%\n");
   printf("------------------------------------------------------------------------\n");
   
   // Acquire cache list lock to prevent race conditions
@@ -148,7 +147,7 @@ slab_print_stats(void)
       struct slab_cache_stats stats;
       slab_get_cache_stats(cache, &stats);
       
-      printf("%-12s %8d %6d %6d %6d %6d %8d %8d %5d\n",
+      printf("%s\t\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\n",
              stats.name, stats.objsize, stats.nr_slabs, stats.nr_objs,
              stats.nr_free, stats.pages_in_use, stats.allocated_bytes,
              stats.total_bytes, stats.fragmentation_pct);
@@ -227,8 +226,7 @@ slab_print_fragmentation_report(void)
   uint total_capacity = 0;
   uint total_used = 0;
   
-  printf("%-12s %8s %6s %6s %8s %8s %6s %6s %6s\n",
-         "Cache", "ObjSize", "OptPg", "ActPg", "IntFrag%", "ExtFrag%", "Util%", "Waste", "Effic");
+  printf("Cache\t\tObjSize\tOptPg\tActPg\tIntFrag%%\tExtFrag%%\tUtil%%\tWaste\tEffic\n");
   printf("--------------------------------------------------------------------------------\n");
   
   // Acquire cache list lock to prevent race conditions
@@ -260,7 +258,7 @@ slab_print_fragmentation_report(void)
         if(efficiency > 100) efficiency = 100;
       }
       
-      printf("%-12s %8d %6d %6d %8d %8d %6d %6d %6d\n",
+      printf("%s\t\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\n",
              stats.name, stats.objsize, analysis.optimal_pages, analysis.actual_pages,
              analysis.internal_fragmentation_pct, analysis.external_fragmentation_pct,
              analysis.utilization_pct, analysis.wasted_bytes, efficiency);

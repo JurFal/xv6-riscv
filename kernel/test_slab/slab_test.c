@@ -1,13 +1,13 @@
 // Slab allocator test functions implementation
 // Provides testing functionality for the slab memory allocator
 
-#include "types.h"
-#include "param.h"
-#include "memlayout.h"
-#include "spinlock.h"
-#include "riscv.h"
-#include "defs.h"
-#include "slab.h"
+#include "../types.h"
+#include "../param.h"
+#include "../memlayout.h"
+#include "../spinlock.h"
+#include "../riscv.h"
+#include "../defs.h"
+#include "../slab.h"
 #include "slab_test.h"
 
 // Simple pseudo-random number generator for testing
