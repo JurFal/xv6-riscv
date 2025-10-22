@@ -7,6 +7,8 @@
 - 第二部分扩展 `vm` 与 `kalloc` 支持超页：实现超页分配池、超页映射/复制、部分释放时的降级与重映射，并修复在跨越2MB边界和已有L0页表时出现的 “remap” 报错。
 - 测试覆盖 `pgtbltest` 中的 `superpg_fork` 与 `superpg_free` 场景，最终在“fork后子进程拥有巨页”和“部分释放巨页不触发remap”两方面达成正确性。
 
+- 实验结果![result.png](result.png)
+
 ## Speed up system calls 实现
 
 - 目标与思路
