@@ -503,3 +503,130 @@ sys_pipe(void)
   }
   return 0;
 }
+
+#define MMAPBASE ((uint64)1<<30)
+
+uint64
+sys_mmap(void)
+{
+  struct proc *p = myproc();
+  uint64 uaddr, off;
+  int len, prot, flags, fd;
+  struct file *f;
+
+  argaddr(0, &uaddr);
+  argint(1, &len);
+  argint(2, &prot);
+  argint(3, &flags);
+  if(argfd(4, &fd, &f) < 0)
+    return (uint64)-1;
+  argaddr(5, &off);
+
+  if(len <= 0)
+    return (uint64)-1;
+  if(off != 0)
+    return (uint64)-1;
+  if(f->type != FD_INODE)
+    return (uint64)-1;
+  if((flags & MAP_SHARED) && (prot & PROT_WRITE) && !f->writable)
+    return (uint64)-1;
+
+  // find a free vma slot
+  int idx = -1;
+  for(int i=0;i<NVMA;i++){
+    if(p->vmas[i].used == 0){ idx = i; break; }
+  }
+  if(idx < 0)
+    return (uint64)-1;
+
+  uint64 va = p->mmap_base ? p->mmap_base : MMAPBASE;
+  uint64 mlen = PGROUNDUP((uint64)len);
+  va = PGROUNDUP(va);
+
+  // install VMA
+  p->vmas[idx].addr = va;
+  p->vmas[idx].len = mlen;
+  p->vmas[idx].prot = prot;
+  p->vmas[idx].flags = flags;
+  p->vmas[idx].f = filedup(f);
+  p->vmas[idx].used = 1;
+
+  p->mmap_base = va + mlen;
+
+  return va;
+}
+
+uint64
+sys_munmap(void)
+{
+  struct proc *p = myproc();
+  uint64 uaddr;
+  int len;
+
+  argaddr(0, &uaddr);
+  argint(1, &len);
+
+  if(len <= 0)
+    return -1;
+  if(uaddr % PGSIZE != 0)
+    return -1;
+  if(len % PGSIZE != 0)
+    return -1;
+
+  // find VMA containing this range
+  struct vma *v = 0;
+  for(int i=0;i<NVMA;i++){
+    if(p->vmas[i].used){
+      uint64 start = p->vmas[i].addr;
+      uint64 end = start + p->vmas[i].len;
+      if(uaddr >= start && (uaddr + (uint64)len) <= end){
+        v = &p->vmas[i];
+        break;
+      }
+    }
+  }
+  if(v == 0)
+    return -1;
+
+  uint64 start = uaddr;
+  uint64 mlen = (uint64)len;
+  uint64 end = start + mlen;
+
+  // write back if MAP_SHARED and pages are present
+  if(v->flags & MAP_SHARED){
+    struct inode *ip = v->f->ip;
+    begin_op();
+    ilock(ip);
+    for(uint64 a = start; a < end; a += PGSIZE){
+      uint64 pa = walkaddr(p->pagetable, a);
+      if(pa){
+        uint off = (uint)(a - v->addr);
+        int n = PGSIZE;
+        if(off + n > v->len) n = v->len - off;
+        writei(ip, 0, pa, off, n);
+      }
+    }
+    iunlock(ip);
+    end_op();
+  }
+
+  // unmap pages in the range, free physical memory
+  uvmunmap(p->pagetable, start, mlen/PGSIZE, 1);
+
+  // shrink or remove VMA
+  if(start == v->addr && end == v->addr + v->len){
+    // entire region
+    fileclose(v->f);
+    v->used = 0;
+  } else if(start == v->addr){
+    v->addr += mlen;
+    v->len -= mlen;
+  } else if(end == v->addr + v->len){
+    v->len -= mlen;
+  } else {
+    // unmap must be from start or end only in this simple implementation
+    return -1;
+  }
+
+  return 0;
+}

@@ -7,6 +7,9 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "fs.h"
+#include "sleeplock.h"
+#include "file.h"
+#include "fcntl.h"
 
 /*
  * the kernel's page table.
@@ -500,12 +503,42 @@ vmfault(pagetable_t pagetable, uint64 va, int read)
   struct proc *p = myproc();
   
 
-  if (va >= p->sz)
-    return 0;
   va = PGROUNDDOWN(va);
   if(ismapped(pagetable, va)) {
     return 0;
   }
+
+  // handle mmap-backed faults
+  for(int i=0; i<NVMA; i++){
+    if(p->vmas[i].used){
+      uint64 start = p->vmas[i].addr;
+      uint64 end = start + p->vmas[i].len;
+      if(va >= start && va < end){
+        mem = (uint64) kalloc();
+        if(mem == 0)
+          return 0;
+        memset((void *) mem, 0, PGSIZE);
+        // read file content into the page
+        uint off = (uint)(va - start);
+        int n = PGSIZE;
+        if(off + n > p->vmas[i].len) n = p->vmas[i].len - off;
+        ilock(p->vmas[i].f->ip);
+        readi(p->vmas[i].f->ip, 0, mem, off, n);
+        iunlock(p->vmas[i].f->ip);
+        int perm = PTE_U | PTE_R;
+        if(p->vmas[i].prot & PROT_WRITE) perm |= PTE_W;
+        if (mappages(p->pagetable, va, PGSIZE, mem, perm) != 0) {
+          kfree((void *)mem);
+          return 0;
+        }
+        return mem;
+      }
+    }
+  }
+
+  // sbrk-lazy allocation for addresses within process size
+  if (va >= p->sz)
+    return 0;
   mem = (uint64) kalloc();
   if(mem == 0)
     return 0;

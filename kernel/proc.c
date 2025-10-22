@@ -5,6 +5,10 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
+#include "sleeplock.h"
+#include "fs.h"
+#include "file.h"
+#include "fcntl.h"
 
 struct cpu cpus[NCPU];
 
@@ -145,6 +149,11 @@ found:
   memset(&p->context, 0, sizeof(p->context));
   p->context.ra = (uint64)forkret;
   p->context.sp = p->kstack + PGSIZE;
+  // init mmap state
+  p->mmap_base = ((uint64)1<<30);
+  for(int i=0;i<NVMA;i++){
+    p->vmas[i].used = 0;
+  }
 
   return p;
 }
@@ -285,6 +294,15 @@ kfork(void)
       np->ofile[i] = filedup(p->ofile[i]);
   np->cwd = idup(p->cwd);
 
+  // inherit mmap regions
+  np->mmap_base = p->mmap_base;
+  for(i=0;i<NVMA;i++){
+    np->vmas[i] = p->vmas[i];
+    if(np->vmas[i].used && np->vmas[i].f){
+      np->vmas[i].f = filedup(np->vmas[i].f);
+    }
+  }
+
   safestrcpy(np->name, p->name, sizeof(p->name));
 
   pid = np->pid;
@@ -327,6 +345,33 @@ kexit(int status)
 
   if(p == initproc)
     panic("init exiting");
+
+  // write back and unmap mmap regions
+  for(int i=0;i<NVMA;i++){
+    if(p->vmas[i].used){
+      struct vma *v = &p->vmas[i];
+      if(v->flags & MAP_SHARED){
+        struct inode *ip = v->f->ip;
+        begin_op();
+        ilock(ip);
+        for(uint64 a = v->addr; a < v->addr + v->len; a += PGSIZE){
+          uint64 pa = walkaddr(p->pagetable, a);
+          if(pa){
+            uint off = (uint)(a - v->addr);
+            int n = PGSIZE;
+            if(off + n > v->len) n = v->len - off;
+            writei(ip, 0, pa, off, n);
+          }
+        }
+        iunlock(ip);
+        end_op();
+      }
+      // unmap and free
+      uvmunmap(p->pagetable, v->addr, v->len/PGSIZE, 1);
+      fileclose(v->f);
+      v->used = 0;
+    }
+  }
 
   // Close all open files.
   for(int fd = 0; fd < NOFILE; fd++){
