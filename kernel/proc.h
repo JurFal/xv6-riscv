@@ -84,6 +84,7 @@ struct trapframe {
 struct vma {
   uint64 addr;    // start address (page-aligned)
   uint64 len;     // length in bytes
+  uint64 foff;    // file offset for start (kept in sync on shrink)
   int prot;       // PROT flags
   int flags;      // MAP_SHARED or MAP_PRIVATE
   struct file *f; // file being mapped

@@ -302,6 +302,18 @@ kfork(void)
       np->vmas[i].f = filedup(np->vmas[i].f);
     }
   }
+#ifdef LAB_PGTBL
+  int vma_cnt = 0;
+  for(i=0;i<NVMA;i++) if(np->vmas[i].used) vma_cnt++;
+  printf("kfork: parent pid=%d child pid=%d mmap_base=0x%p vmas=%d\n", p->pid, np->pid, (void*)np->mmap_base, vma_cnt);
+  for(i=0;i<NVMA;i++){
+    if(np->vmas[i].used){
+      printf("  child vma[%d]: addr=0x%p len=%lu prot=0x%x flags=0x%x ip->size=%d\n",
+             i, (void*)np->vmas[i].addr, np->vmas[i].len, np->vmas[i].prot, np->vmas[i].flags,
+             np->vmas[i].f ? np->vmas[i].f->ip->size : -1);
+    }
+  }
+#endif
 
   safestrcpy(np->name, p->name, sizeof(p->name));
 
@@ -351,20 +363,26 @@ kexit(int status)
     if(p->vmas[i].used){
       struct vma *v = &p->vmas[i];
       if(v->flags & MAP_SHARED){
-        struct inode *ip = v->f->ip;
-        begin_op();
-        ilock(ip);
-        for(uint64 a = v->addr; a < v->addr + v->len; a += PGSIZE){
-          uint64 pa = walkaddr(p->pagetable, a);
-          if(pa){
-            uint off = (uint)(a - v->addr);
-            int n = PGSIZE;
-            if(off + n > v->len) n = v->len - off;
-            writei(ip, 0, pa, off, n);
+        if(!(v->prot & PROT_WRITE)) {
+          // skip writeback for read-only mappings
+          printf("kexit: skip writeback for read-only mapping pid=%d\n", p->pid);
+        } else {
+          struct inode *ip = v->f->ip;
+          begin_op();
+          ilock(ip);
+          for(uint64 a = v->addr; a < v->addr + v->len; a += PGSIZE){
+            uint64 pa = walkaddr(p->pagetable, a);
+            if(pa){
+              uint off = (uint)((a - v->addr) + v->foff);
+              int n = PGSIZE;
+              if(off + n > ip->size) n = ip->size - off;
+              if(n > 0)
+                writei(ip, 0, pa, off, n);
+            }
           }
+          iunlock(ip);
+          end_op();
         }
-        iunlock(ip);
-        end_op();
       }
       // unmap and free
       uvmunmap(p->pagetable, v->addr, v->len/PGSIZE, 1);
@@ -372,6 +390,8 @@ kexit(int status)
       v->used = 0;
     }
   }
+  // flush TLB after unmapping all VMA regions
+  sfence_vma();
 
   // Close all open files.
   for(int fd = 0; fd < NOFILE; fd++){

@@ -546,12 +546,18 @@ sys_mmap(void)
   // install VMA
   p->vmas[idx].addr = va;
   p->vmas[idx].len = mlen;
+  p->vmas[idx].foff = off;
   p->vmas[idx].prot = prot;
   p->vmas[idx].flags = flags;
   p->vmas[idx].f = filedup(f);
   p->vmas[idx].used = 1;
 
   p->mmap_base = va + mlen;
+
+#ifdef LAB_PGTBL
+  printf("mmap: pid=%d idx=%d va=0x%p len=%d->%ld prot=0x%x flags=0x%x ip->size=%u\n",
+         p->pid, idx, (void*)va, len, mlen, prot, flags, p->vmas[idx].f->ip->size);
+#endif
 
   return va;
 }
@@ -593,25 +599,35 @@ sys_munmap(void)
   uint64 end = start + mlen;
 
   // write back if MAP_SHARED and pages are present
-  if(v->flags & MAP_SHARED){
-    struct inode *ip = v->f->ip;
-    begin_op();
-    ilock(ip);
-    for(uint64 a = start; a < end; a += PGSIZE){
-      uint64 pa = walkaddr(p->pagetable, a);
-      if(pa){
-        uint off = (uint)(a - v->addr);
-        int n = PGSIZE;
-        if(off + n > v->len) n = v->len - off;
-        writei(ip, 0, pa, off, n);
-      }
-    }
-    iunlock(ip);
-    end_op();
+  if((v->flags & MAP_SHARED) && (v->prot & PROT_WRITE)){
+     struct inode *ip = v->f->ip;
+     begin_op();
+     ilock(ip);
+#ifdef LAB_PGTBL
+    printf("munmap: pid=%d start=0x%p len=%d vma.addr=0x%p vma.len=%lu ip->size=%d\n",
+           p->pid, (void*)start, len, (void*)v->addr, v->len, ip->size);
+#endif
+     for(uint64 a = start; a < end; a += PGSIZE){
+       uint64 pa = walkaddr(p->pagetable, a);
+       if(pa){
+         uint off = (uint)((a - v->addr) + v->foff);
+         int n = PGSIZE;
+         if(off + n > ip->size) n = ip->size - off;
+#ifdef LAB_PGTBL
+         printf("  writeback page a=0x%p off=%u n=%d pa=0x%p\n", (void*)a, off, n, (void*)pa);
+#endif
+         if(n > 0)
+           writei(ip, 0, pa, off, n);
+       }
+     }
+     iunlock(ip);
+     end_op();
   }
 
   // unmap pages in the range, free physical memory
   uvmunmap(p->pagetable, start, mlen/PGSIZE, 1);
+  // flush TLB so the unmapped range is not accessible anymore
+  sfence_vma();
 
   // shrink or remove VMA
   if(start == v->addr && end == v->addr + v->len){
@@ -621,6 +637,7 @@ sys_munmap(void)
   } else if(start == v->addr){
     v->addr += mlen;
     v->len -= mlen;
+    v->foff += mlen;
   } else if(end == v->addr + v->len){
     v->len -= mlen;
   } else {

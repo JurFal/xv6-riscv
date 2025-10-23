@@ -95,6 +95,10 @@ kvminithart()
 //   21..29 -- 9 bits of level-1 index.
 //   12..20 -- 9 bits of level-0 index.
 //    0..11 -- 12 bits of byte offset within the page.
+
+// walk the page table. return the address of the PTE for
+// virtual address va. if alloc!=0, create any required
+// page-table pages.
 pte_t *
 walk(pagetable_t pagetable, uint64 va, int alloc)
 {
@@ -105,29 +109,26 @@ walk(pagetable_t pagetable, uint64 va, int alloc)
     pte_t *pte = &pagetable[PX(level, va)];
     if(*pte & PTE_V) {
       pagetable = (pagetable_t)PTE2PA(*pte);
-#ifdef LAB_PGTBL
-      if(PTE_LEAF(*pte)) {
-        return pte;
-      }
-#endif
     } else {
-      if(!alloc || (pagetable = (pde_t*)kalloc()) == 0)
+      if(!alloc)
         return 0;
-      memset(pagetable, 0, PGSIZE);
-      *pte = PA2PTE(pagetable) | PTE_V;
+      pagetable_t newpt = (pagetable_t)kalloc();
+      if(newpt == 0)
+        return 0;
+      memset(newpt, 0, PGSIZE);
+      *pte = PA2PTE(newpt) | PTE_V;
+      pagetable = newpt;
     }
   }
   return &pagetable[PX(0, va)];
 }
 
-// Look up a virtual address, return the physical address,
-// or 0 if not mapped.
-// Can only be used to look up user pages.
+// Return the address of the physical page that va maps to.
+// Return 0 if va is not mapped.
 uint64
 walkaddr(pagetable_t pagetable, uint64 va)
 {
   pte_t *pte;
-  uint64 pa;
 
   if(va >= MAXVA)
     return 0;
@@ -139,18 +140,50 @@ walkaddr(pagetable_t pagetable, uint64 va)
     return 0;
   if((*pte & PTE_U) == 0)
     return 0;
-  pa = PTE2PA(*pte);
-  return pa;
+  return PTE2PA(*pte);
 }
 
+// Copy a null-terminated string from user to kernel.
+// Copy bytes to dst from virtual address srcva in a given page table.
+// Return 0 on success, -1 on error.
+int
+copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
+{
+  uint64 n, va0, pa0;
+  int got_null = 0;
 
-#if defined(LAB_PGTBL) || defined(SOL_MMAP) || defined(SOL_COW)
-void
-vmprint(pagetable_t pagetable) {
-  // your code here
+  while(got_null == 0 && max > 0){
+    va0 = PGROUNDDOWN(srcva);
+    pa0 = walkaddr(pagetable, va0);
+    if(pa0 == 0) {
+      // allow faults for lazily-allocated/mapped pages
+      pa0 = vmfault(pagetable, va0, 1);
+      if(pa0 == 0)
+        return -1;
+    }
+    n = PGSIZE - (srcva - va0);
+    if(n > max)
+      n = max;
+
+    char *p = (char *)(pa0 + (srcva - va0));
+    for(int i = 0; i < n; i++){
+      if(p[i] == '\0'){
+        dst[i] = '\0';
+        got_null = 1;
+        break;
+      } else {
+        dst[i] = p[i];
+      }
+    }
+
+    max -= n;
+    dst += n;
+    srcva = va0 + PGSIZE;
+  }
+  if(got_null)
+    return 0;
+  return -1;
 }
-#endif
-
 
 
 // add a mapping to the kernel page table.
@@ -200,7 +233,6 @@ mappages(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, int perm)
 }
 
 // create an empty user page table.
-// returns 0 if out of memory.
 pagetable_t
 uvmcreate()
 {
@@ -240,7 +272,6 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
     *pte = 0;
   }
 }
-
 
 // Allocate PTEs and physical memory to grow process from oldsz to
 // newsz, which need not be page aligned.  Returns new size or 0 on error.
@@ -446,50 +477,6 @@ copyin(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len)
   return 0;
 }
 
-// Copy a null-terminated string from user to kernel.
-// Copy bytes to dst from virtual address srcva in a given page table,
-// until a '\0', or max.
-// Return 0 on success, -1 on error.
-int
-copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
-{
-  uint64 n, va0, pa0;
-  int got_null = 0;
-
-  while(got_null == 0 && max > 0){
-    va0 = PGROUNDDOWN(srcva);
-    pa0 = walkaddr(pagetable, va0);
-    if(pa0 == 0)
-      return -1;
-    n = PGSIZE - (srcva - va0);
-    if(n > max)
-      n = max;
-
-    char *p = (char *) (pa0 + (srcva - va0));
-    while(n > 0){
-      if(*p == '\0'){
-        *dst = '\0';
-        got_null = 1;
-        break;
-      } else {
-        *dst = *p;
-      }
-      --n;
-      --max;
-      p++;
-      dst++;
-    }
-
-    srcva = va0 + PGSIZE;
-  }
-  if(got_null){
-    return 0;
-  } else {
-    return -1;
-  }
-}
-
-
 
 
 // allocate and map user memory if process is referencing a page
@@ -519,12 +506,27 @@ vmfault(pagetable_t pagetable, uint64 va, int read)
           return 0;
         memset((void *) mem, 0, PGSIZE);
         // read file content into the page
-        uint off = (uint)(va - start);
+        uint off = (uint)((va - start) + p->vmas[i].foff);
         int n = PGSIZE;
-        if(off + n > p->vmas[i].len) n = p->vmas[i].len - off;
+        // clamp read length to file size, not mapping length
+        if(off + n > p->vmas[i].f->ip->size) n = p->vmas[i].f->ip->size - off;
+        if(n < 0) n = 0;
+#ifdef LAB_PGTBL
+        printf("vmfault: pid=%d va=0x%p vma[%d]=[start=0x%p len=%ld prot=0x%x flags=0x%x] off=%u ip->size=%u n=%d\n",
+                p->pid, (void*)va, i, (void*)start, p->vmas[i].len, p->vmas[i].prot, p->vmas[i].flags, off, p->vmas[i].f->ip->size, n);
+#endif
         ilock(p->vmas[i].f->ip);
-        readi(p->vmas[i].f->ip, 0, mem, off, n);
+        int r = 0;
+        if(n > 0)
+          r = readi(p->vmas[i].f->ip, 0, mem, off, n);
+#ifdef LAB_PGTBL
+        printf("vmfault: readi ret=%d n=%d off=%u\n", r, n, off);
+#endif
         iunlock(p->vmas[i].f->ip);
+#ifdef LAB_PGTBL
+        printf("vmfault: sample bytes: [0]=0x%x [1024]=0x%x [2048]=0x%x [3072]=0x%x\n",
+               ((unsigned char*)mem)[0], ((unsigned char*)mem)[1024], ((unsigned char*)mem)[2048], ((unsigned char*)mem)[3072]);
+#endif
         int perm = PTE_U | PTE_R;
         if(p->vmas[i].prot & PROT_WRITE) perm |= PTE_W;
         if (mappages(p->pagetable, va, PGSIZE, mem, perm) != 0) {
@@ -568,5 +570,14 @@ ismapped(pagetable_t pagetable, uint64 va) {
 pte_t*
 pgpte(pagetable_t pagetable, uint64 va) {
   return walk(pagetable, va, 0);
+}
+#endif
+
+#if defined(LAB_PGTBL) || defined(SOL_MMAP)
+void
+vmprint(pagetable_t pagetable)
+{
+  // Minimal implementation to satisfy sys_pause linkage; can be expanded if needed.
+  printf("vmprint: pagetable=0x%p\n", (void*)pagetable);
 }
 #endif
