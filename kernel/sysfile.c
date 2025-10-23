@@ -600,28 +600,28 @@ sys_munmap(void)
 
   // write back if MAP_SHARED and pages are present
   if((v->flags & MAP_SHARED) && (v->prot & PROT_WRITE)){
-     struct inode *ip = v->f->ip;
-     begin_op();
-     ilock(ip);
+    struct inode *ip = v->f->ip;
+    begin_op();
+    ilock(ip);
 #ifdef LAB_PGTBL
     printf("munmap: pid=%d start=0x%p len=%d vma.addr=0x%p vma.len=%lu ip->size=%d\n",
            p->pid, (void*)start, len, (void*)v->addr, v->len, ip->size);
 #endif
-     for(uint64 a = start; a < end; a += PGSIZE){
-       uint64 pa = walkaddr(p->pagetable, a);
-       if(pa){
-         uint off = (uint)((a - v->addr) + v->foff);
-         int n = PGSIZE;
-         if(off + n > ip->size) n = ip->size - off;
+    for(uint64 a = start; a < end; a += PGSIZE){
+      uint64 pa = walkaddr(p->pagetable, a);
+      if(pa){
+        uint off = (uint)((a - v->addr) + v->foff);
+        int n = PGSIZE;
+        if(off + n > ip->size) n = ip->size - off;
 #ifdef LAB_PGTBL
-         printf("  writeback page a=0x%p off=%u n=%d pa=0x%p\n", (void*)a, off, n, (void*)pa);
+        printf("  writeback page a=0x%p off=%u n=%d pa=0x%p\n", (void*)a, off, n, (void*)pa);
 #endif
-         if(n > 0)
-           writei(ip, 0, pa, off, n);
-       }
-     }
-     iunlock(ip);
-     end_op();
+        if(n > 0)
+          writei(ip, 0, pa, off, n);
+      }
+    }
+    iunlock(ip);
+    end_op();
   }
 
   // unmap pages in the range, free physical memory

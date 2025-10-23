@@ -557,12 +557,12 @@ writei(struct inode *ip, int user_src, uint64 src, uint off, uint n)
     }
 #ifdef LAB_PGTBL
     // Debug: sample data being written into disk buffer at current offset
-    int o = off % BSIZE;
+    /*int o = off % BSIZE;
     int s0 = bp->data[o];
     int s512 = (o + 512 < BSIZE) ? bp->data[o + 512] : -1;
     int s1024 = (o + 1024 < BSIZE) ? bp->data[o + 1024] : -1;
     printf("writei: inum=%d blk=%u off=%u m=%u samples=[0]=0x%x [512]=0x%x [1024]=0x%x\n",
-           ip->inum, addr, off, m, s0, s512, s1024);
+           ip->inum, addr, off, m, s0, s512, s1024);*/
 #endif
     log_write(bp);
     brelse(bp);
@@ -571,6 +571,9 @@ writei(struct inode *ip, int user_src, uint64 src, uint off, uint n)
   if(off > ip->size)
     ip->size = off;
 
+  // write the i-node back to disk even if the size didn't change
+  // because the loop above might have called bmap() and added a new
+  // block to ip->addrs[].
   iupdate(ip);
 
   return tot;
