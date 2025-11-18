@@ -5,6 +5,12 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
+// Order matters: fs.h (NDIRECT) and sleeplock.h are needed before file.h
+#include "fs.h"      // NDIRECT and filesystem structures/constants
+#include "sleeplock.h" // struct sleeplock used in struct inode
+#include "file.h"    // struct inode definition
+#include "stat.h"    // T_FILE constant
+extern struct spinlock wait_lock; // for sleep/wakeup coordination
 
 struct spinlock tickslock;
 uint ticks;
@@ -15,6 +21,94 @@ extern char trampoline[], uservec[];
 void kernelvec();
 
 extern int devintr();
+
+// simple integer to string (kernel-side, small helper)
+static void itoa(int v, char *buf) {
+  char tmp[16]; int i = 0; int n = v;
+  if(n == 0){ buf[0] = '0'; buf[1] = '\0'; return; }
+  int neg = 0; if(n < 0){ neg = 1; n = -n; }
+  while(n){ tmp[i++] = '0' + (n % 10); n /= 10; }
+  int pos = 0; if(neg) buf[pos++] = '-';
+  while(i) buf[pos++] = tmp[--i];
+  buf[pos] = '\0';
+}
+
+// Write a minimal core dump capturing process identity and registers.
+static void dump_core(struct proc *p, int signum) {
+  // Build filename "core.<pid>.<signum>"
+  char path[32];
+  char name[DIRSIZ];
+  char pidbuf[16], sigbuf[16];
+  itoa(p->pid, pidbuf);
+  itoa(signum, sigbuf);
+  // Compose path without slash so it is created in cwd
+  // "core.<pid>.<signum>"
+  int off = 0;
+  const char *prefix = "core.";
+  for(int i=0; prefix[i]; i++) path[off++] = prefix[i];
+  for(int i=0; pidbuf[i]; i++) path[off++] = pidbuf[i];
+  path[off++] = '.';
+  for(int i=0; sigbuf[i]; i++) path[off++] = sigbuf[i];
+  path[off] = '\0';
+
+  begin_op();
+  struct inode *dp = nameiparent(path, name);
+  if(dp == 0){
+    end_op();
+    printf("[core] pid=%d signum=%d failed: nameiparent\n", p->pid, signum);
+    return;
+  }
+  ilock(dp);
+  struct inode *ip = dirlookup(dp, name, 0);
+  if(ip){
+    // Truncate existing file (keep it locked for writing)
+    ilock(ip);
+    itrunc(ip);
+    iunlockput(dp);
+  } else {
+    // Allocate new inode and link it
+    ip = ialloc(dp->dev, T_FILE);
+    if(ip == 0){
+      iunlockput(dp);
+      end_op();
+      printf("[core] pid=%d signum=%d failed: ialloc\n", p->pid, signum);
+      return;
+    }
+    ilock(ip);
+    ip->major = 0; ip->minor = 0; ip->nlink = 1; iupdate(ip);
+    if(dirlink(dp, name, ip->inum) < 0){
+      // de-allocate
+      ip->nlink = 0; iupdate(ip);
+      iunlockput(ip);
+      iunlockput(dp);
+      end_op();
+      printf("[core] pid=%d signum=%d failed: dirlink\n", p->pid, signum);
+      return;
+    }
+    iunlockput(dp);
+  }
+
+  // Prepare dump content
+  struct {
+    int pid;
+    int signum;
+    char name[16];
+    struct trapframe tf;
+  } dump;
+  dump.pid = p->pid;
+  dump.signum = signum;
+  safestrcpy(dump.name, p->name, sizeof(dump.name));
+  dump.tf = *(p->trapframe);
+
+  // Write dump
+  uint offw = 0;
+  int wrote = writei(ip, 0, (uint64)&dump, offw, sizeof(dump));
+  if(wrote != sizeof(dump)){
+    printf("[core] pid=%d signum=%d write failed (%d/%lu)\n", p->pid, signum, wrote, sizeof(dump));
+  }
+  iunlockput(ip);
+  end_op();
+}
 
 void
 trapinit(void)
@@ -83,6 +177,186 @@ usertrap(void)
   // give up the CPU if this is a timer interrupt.
   if(which_dev == 2)
     yield();
+
+  // Check and deliver pending signals before returning to user space.
+  // Only if not already in a signal handler (avoid re-entry).
+  if(p->pending_signals != 0 && p->tf_backup_valid == 0){
+    printf("[trap] pid=%d has pending=0x%x, delivering...\n", p->pid, p->pending_signals);
+    for(int signum = 0; signum < NSIG; signum++){
+      if(p->pending_signals & (1U << signum)){
+        void (*handler)(int) = p->handlers[signum];
+        // 使用 handlers_registered 位掩码判断是否注册了处理器，允许地址为 0
+        if(p->handlers_registered & (1U << signum)){
+          // Clear pending bit and divert to handler
+          p->pending_signals &= ~(1U << signum);
+          // Backup current user context
+          p->tf_backup = *(p->trapframe);
+          p->tf_backup_valid = 1;
+          // Prepare arguments and return address for handler
+          p->trapframe->a0 = signum;                // first argument: signum
+          p->trapframe->ra = 0xffffffffffffffffULL; // fake return address; handler must call sigreturn
+          // Jump to handler when returning to user space
+          printf("[trap] pid=%d deliver signum=%d handler=0x%lx epc(before)=0x%lx\n", p->pid, signum, (uint64)handler, p->trapframe->epc);
+          p->trapframe->epc = (uint64)handler;
+          break;
+        } else {
+          // No handler registered: default action
+          switch(signum){
+          case 1: // SIGHUP
+            printf("[trap] pid=%d signum=SIGHUP default terminate\n", p->pid);
+            p->pending_signals &= ~(1U << signum);
+            setkilled(p);
+            break;
+          case 2: // SIGINT
+            printf("[trap] pid=%d signum=SIGINT default terminate\n", p->pid);
+            p->pending_signals &= ~(1U << signum);
+            setkilled(p);
+            break;
+          case 3: // SIGQUIT
+            printf("[trap] pid=%d signum=SIGQUIT default terminate+core\n", p->pid);
+            dump_core(p, signum);
+            p->pending_signals &= ~(1U << signum);
+            setkilled(p);
+            break;
+          case 4: // SIGILL
+            printf("[trap] pid=%d signum=SIGILL default terminate+core\n", p->pid);
+            dump_core(p, signum);
+            p->pending_signals &= ~(1U << signum);
+            setkilled(p);
+            break;
+          case 5: // SIGTRAP
+            printf("[trap] pid=%d signum=SIGTRAP default terminate+core\n", p->pid);
+            dump_core(p, signum);
+            p->pending_signals &= ~(1U << signum);
+            setkilled(p);
+            break;
+          case 6: // SIGABRT
+            printf("[trap] pid=%d signum=SIGABRT default terminate+core\n", p->pid);
+            dump_core(p, signum);
+            p->pending_signals &= ~(1U << signum);
+            setkilled(p);
+            break;
+          case 7: // SIGBUS
+            printf("[trap] pid=%d signum=SIGBUS default terminate+core\n", p->pid);
+            dump_core(p, signum);
+            p->pending_signals &= ~(1U << signum);
+            setkilled(p);
+            break;
+          case 8: // SIGFPE
+            printf("[trap] pid=%d signum=SIGFPE default terminate+core\n", p->pid);
+            dump_core(p, signum);
+            p->pending_signals &= ~(1U << signum);
+            setkilled(p);
+            break;
+          case 11: // SIGSEGV
+            printf("[trap] pid=%d signum=SIGSEGV default terminate+core\n", p->pid);
+            dump_core(p, signum);
+            p->pending_signals &= ~(1U << signum);
+            setkilled(p);
+            break;
+          case 9: // SIGKILL (uncatchable)
+            printf("[trap] pid=%d signum=SIGKILL default terminate\n", p->pid);
+            p->pending_signals &= ~(1U << signum);
+            setkilled(p);
+            break;
+          case 13: // SIGPIPE
+            printf("[trap] pid=%d signum=SIGPIPE default terminate\n", p->pid);
+            p->pending_signals &= ~(1U << signum);
+            setkilled(p);
+            break;
+          case 16: // SIGSTKFLT
+            printf("[trap] pid=%d signum=SIGSTKFLT default terminate\n", p->pid);
+            p->pending_signals &= ~(1U << signum);
+            setkilled(p);
+            break;
+          case 15: // SIGTERM
+            printf("[trap] pid=%d signum=SIGTERM default terminate\n", p->pid);
+            p->pending_signals &= ~(1U << signum);
+            setkilled(p);
+            break;
+          case 17: // SIGCHLD
+            printf("[trap] pid=%d signum=SIGCHLD default ignore\n", p->pid);
+            p->pending_signals &= ~(1U << signum);
+            continue;
+          case 18: // SIGCONT
+            printf("[trap] pid=%d signum=SIGCONT default continue\n", p->pid);
+            p->pending_signals &= ~(1U << signum);
+            // If the process was stopped but managed to run to here (unlikely), clear stopped flag.
+            // Actual wakeup is handled in sys_sigsend when SIGCONT is sent.
+            continue;
+          case 19: // SIGSTOP (uncatchable, default stop)
+          case 20: // SIGTSTP
+          case 21: // SIGTTIN
+          case 22: // SIGTTOU
+            printf("[trap] pid=%d signum=%d default stop (sleep)\n", p->pid, signum);
+            p->pending_signals &= ~(1U << signum);
+            // mark stopped; do NOT hold p->lock across sleep() to avoid double-acquire
+            p->stopped = 1;
+            acquire(&wait_lock);
+            sleep(&p->stopped, &wait_lock);
+            // woke up (likely via SIGCONT): continue scanning remaining signals
+            release(&wait_lock);
+            continue;
+          case 10: // SIGUSR1
+          case 12: // SIGUSR2
+          case 14: // SIGALRM
+          case 23: // SIGURG
+            printf("[trap] pid=%d signum=SIGURG default ignore\n", p->pid);
+            p->pending_signals &= ~(1U << signum);
+            continue;
+          case 24: // SIGXCPU
+            printf("[trap] pid=%d signum=SIGXCPU default terminate+core\n", p->pid);
+            dump_core(p, signum);
+            p->pending_signals &= ~(1U << signum);
+            setkilled(p);
+            break;
+          case 25: // SIGXFSZ
+            printf("[trap] pid=%d signum=SIGXFSZ default terminate+core\n", p->pid);
+            dump_core(p, signum);
+            p->pending_signals &= ~(1U << signum);
+            setkilled(p);
+            break;
+          case 26: // SIGVTALRM
+            printf("[trap] pid=%d signum=SIGVTALRM default terminate\n", p->pid);
+            p->pending_signals &= ~(1U << signum);
+            setkilled(p);
+            break;
+          case 27: // SIGPROF
+            printf("[trap] pid=%d signum=SIGPROF default terminate\n", p->pid);
+            p->pending_signals &= ~(1U << signum);
+            setkilled(p);
+            break;
+          case 28: // SIGWINCH
+            printf("[trap] pid=%d signum=SIGWINCH default ignore\n", p->pid);
+            p->pending_signals &= ~(1U << signum);
+            continue;
+          case 29: // SIGIO / SIGPOLL
+            printf("[trap] pid=%d signum=SIGIO default terminate\n", p->pid);
+            p->pending_signals &= ~(1U << signum);
+            setkilled(p);
+            break;
+          case 30: // SIGPWR
+            printf("[trap] pid=%d signum=SIGPWR default terminate\n", p->pid);
+            p->pending_signals &= ~(1U << signum);
+            setkilled(p);
+            break;
+          case 31: // SIGSYS
+            printf("[trap] pid=%d signum=SIGSYS default terminate+core\n", p->pid);
+            dump_core(p, signum);
+            p->pending_signals &= ~(1U << signum);
+            setkilled(p);
+            break;
+          default:
+            // Default: ignore and clear pending bit
+            printf("[trap] pid=%d signum=%d default ignore\n", p->pid, signum);
+            p->pending_signals &= ~(1U << signum);
+            // continue scanning other pending signals
+            continue;
+          }
+        }
+      }
+    }
+  }
 
   prepare_return();
 

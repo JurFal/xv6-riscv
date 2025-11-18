@@ -104,4 +104,13 @@ struct proc {
   struct file *ofile[NOFILE];  // Open files
   struct inode *cwd;           // Current directory
   char name[16];               // Process name (debugging)
+
+
+  // --- 新增信号相关字段 ---
+  uint pending_signals;         // 待处理信号的位掩码 (例如，第 2 位为 1 表示收到了 SIGINT)
+  uint handlers_registered;     // 已注册处理器的位掩码（允许地址为 0 的处理器）
+  void (*handlers[NSIG])(int); // 信号处理函数指针数组 (NSIG 是最大信号数量，比如 32)
+  struct trapframe tf_backup;   // 保存陷阱帧 (注意：是结构体本身，不是指针)
+  int tf_backup_valid;        // 标记 tf_backup 是否有效
+  int stopped;                // 进程是否处于停止状态（SIGSTOP/SIGTSTP/TTIN/TTOU）
 };
