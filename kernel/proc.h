@@ -105,6 +105,9 @@ struct proc {
   struct inode *cwd;           // Current directory
   char name[16];               // Process name (debugging)
 
+  int is_kthread;           // 标志位：1 表示为内核线程，0 表示为普通进程
+  void (*kthread_func)(void *); // 内核线程的入口函数
+  void *kthread_arg;        // 内核线程的参数
 
   // --- 新增信号相关字段 ---
   uint pending_signals;         // 待处理信号的位掩码 (例如，第 2 位为 1 表示收到了 SIGINT)
