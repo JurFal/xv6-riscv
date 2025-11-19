@@ -158,6 +158,15 @@ found:
   p->context.ra = (uint64)forkret;
   p->context.sp = p->kstack + PGSIZE;
 
+  // Initialize signal-related fields
+  p->pending_signals = 0;
+  p->handlers_registered = 0;
+  p->tf_backup_valid = 0;
+  p->stopped = 0;
+  for(int si = 0; si < NSIG; si++) {
+    p->handlers[si] = 0;
+  }
+
   return p;
 }
 

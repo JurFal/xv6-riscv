@@ -104,6 +104,9 @@ extern uint64 sys_unlink(void);
 extern uint64 sys_link(void);
 extern uint64 sys_mkdir(void);
 extern uint64 sys_close(void);
+extern uint64 sys_signal(void);
+extern uint64 sys_sigsend(void);
+extern uint64 sys_sigreturn(void);
 extern uint64 sys_shutdown(void);
 extern uint64 sys_slab_alloc(void);
 extern uint64 sys_slab_free(void);
@@ -143,6 +146,9 @@ static uint64 (*syscalls[])(void) = {
 [SYS_link]    sys_link,
 [SYS_mkdir]   sys_mkdir,
 [SYS_close]   sys_close,
+[SYS_signal]  sys_signal,
+[SYS_sigsend] sys_sigsend,
+[SYS_sigreturn] sys_sigreturn,
 #ifdef LAB_NET
 [SYS_bind] sys_bind,
 [SYS_unbind] sys_unbind,
