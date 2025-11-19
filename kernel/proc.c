@@ -399,60 +399,64 @@ kexit(int status)
 
   if(p == initproc)
     panic("init exiting");
-
-  // write back and unmap mmap regions
-  for(int i=0;i<NVMA;i++){
-    if(p->vmas[i].used){
-      struct vma *v = &p->vmas[i];
-      if(v->flags & MAP_SHARED){
-        if(!(v->prot & PROT_WRITE)) {
-          // skip writeback for read-only mappings
-          printf("kexit: skip writeback for read-only mapping pid=%d\n", p->pid);
-        } else {
-          struct inode *ip = v->f->ip;
-          begin_op();
-          ilock(ip);
-          for(uint64 a = v->addr; a < v->addr + v->len; a += PGSIZE){
-            uint64 pa = walkaddr(p->pagetable, a);
-            if(pa){
-              uint off = (uint)((a - v->addr) + v->foff);
-              int n = PGSIZE;
-              if(off + n > ip->size) n = ip->size - off;
-              if(n > 0)
-                writei(ip, 0, pa, off, n);
+  // 对普通进程进行用户空间资源回收；内核线程跳过
+  if(p->is_kthread == 0){
+    // write back and unmap mmap regions
+    for(int i=0;i<NVMA;i++){
+      if(p->vmas[i].used){
+        struct vma *v = &p->vmas[i];
+        if(v->flags & MAP_SHARED){
+          if(!(v->prot & PROT_WRITE)) {
+            // skip writeback for read-only mappings
+            printf("kexit: skip writeback for read-only mapping pid=%d\n", p->pid);
+          } else {
+            struct inode *ip = v->f->ip;
+            begin_op();
+            ilock(ip);
+            for(uint64 a = v->addr; a < v->addr + v->len; a += PGSIZE){
+              uint64 pa = walkaddr(p->pagetable, a);
+              if(pa){
+                uint off = (uint)((a - v->addr) + v->foff);
+                int n = PGSIZE;
+                if(off + n > ip->size) n = ip->size - off;
+                if(n > 0)
+                  writei(ip, 0, pa, off, n);
+              }
             }
+            iunlock(ip);
+            end_op();
           }
-          iunlock(ip);
-          end_op();
         }
+        // unmap and free
+        uvmunmap(p->pagetable, v->addr, v->len/PGSIZE, 1);
+        fileclose(v->f);
+        v->used = 0;
       }
-      // unmap and free
-      uvmunmap(p->pagetable, v->addr, v->len/PGSIZE, 1);
-      fileclose(v->f);
-      v->used = 0;
     }
-  }
-  // flush TLB after unmapping all VMA regions
-  sfence_vma();
+    // flush TLB after unmapping all VMA regions
+    sfence_vma();
 
-  // Close all open files.
-  for(int fd = 0; fd < NOFILE; fd++){
-    if(p->ofile[fd]){
-      struct file *f = p->ofile[fd];
-      fileclose(f);
-      p->ofile[fd] = 0;
+    // Close all open files.
+    for(int fd = 0; fd < NOFILE; fd++){
+      if(p->ofile[fd]){
+        struct file *f = p->ofile[fd];
+        fileclose(f);
+        p->ofile[fd] = 0;
+      }
     }
-  }
 
-  begin_op();
-  iput(p->cwd);
-  end_op();
-  p->cwd = 0;
+    begin_op();
+    iput(p->cwd);
+    end_op();
+    p->cwd = 0;
+  }
 
   acquire(&wait_lock);
 
-  // Give any children to init.
-  reparent(p);
+  if(p->is_kthread == 0){
+    // 仅普通进程需要处理孤儿进程
+    reparent(p);
+  }
 
   // Parent might be sleeping in wait().
   wakeup(p->parent);
@@ -818,15 +822,18 @@ struct proc* kthread_create(void (*func)(void *), void *arg, char *name)
   struct proc *p;
 
   // 1. 分配一个 proc 结构体
+  printf("kthread_create: start func=%p arg=%p name=%s\n", func, arg, name);
   p = allocproc();
   if(p == 0)
     return 0;
+  printf("kthread_create: allocated pid=%d, p=%p (holding p->lock=%d)\n", p->pid, p, holding(&p->lock));
 
   // 2. 设置为内核线程
   p->is_kthread = 1;
   p->kthread_func = func;
   p->kthread_arg = arg;
   safestrcpy(p->name, name, sizeof(p->name));
+  printf("kthread_create: configured is_kthread=1 name=%s\n", p->name);
 
   // 3. 内核线程没有用户页表
   // allocproc() 默认创建了内核页表 (p->pagetable = proc_pagetable(p))
@@ -851,11 +858,14 @@ struct proc* kthread_create(void (*func)(void *), void *arg, char *name)
   
   // swtch() 会加载 kstack 作为栈顶
   p->context.sp = p->kstack + PGSIZE;
+  printf("kthread_create: context set ra=%p sp=%p kstack=%p\n", (void*)p->context.ra, (void*)p->context.sp, (void*)p->kstack);
 
   // 6. 设置为 RUNNABLE 状态，等待调度器调度
-  acquire(&p->lock);
+  // allocproc() 返回时已持有 p->lock，这里直接设置并释放
+  printf("kthread_create: set RUNNABLE with held p->lock pid=%d (holding=%d)\n", p->pid, holding(&p->lock));
   p->state = RUNNABLE;
   release(&p->lock);
+  printf("kthread_create: RUNNABLE set and p->lock released pid=%d\n", p->pid);
 
   return p;
 }

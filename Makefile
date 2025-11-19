@@ -14,6 +14,7 @@ OBJS = \
   $K/string.o \
   $K/main.o \
   $K/vm.o \
+  $K/kpage.o \
   $K/proc.o \
   $K/swtch.o \
   $K/trampoline.o \
@@ -263,7 +264,8 @@ endif
 
 ifeq ($(LAB),pgtbl)
 UPROGS += \
-	$U/_pgtbltest
+	$U/_pgtbltest \
+	$U/_khugepagedtest
 endif
 
 ifeq ($(LAB),lock)
