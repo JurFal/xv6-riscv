@@ -43,6 +43,8 @@ int ugetpid(void);
 uint64 pgpte(void*);
 void kpgtbl(void);
 #endif
+char* mmap(void* addr, int len, int prot, int flags, int fd, int offset);
+int munmap(void* addr, int len);
 int shutdown(void);
 void* slab_alloc(int size);
 int slab_free(void* ptr);

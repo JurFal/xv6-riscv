@@ -51,6 +51,8 @@ entry("send");
 entry("recv");
 entry("pgpte");
 entry("kpgtbl");
+entry("mmap");
+entry("munmap");
 entry("shutdown");
 entry("slab_alloc");
 entry("slab_free");

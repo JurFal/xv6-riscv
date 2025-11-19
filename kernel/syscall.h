@@ -35,7 +35,6 @@
 #define SYS_kpgtbl    34
 #define SYS_signal 35
 #define SYS_sigsend 36
-#define SYS_sigreturn 37
-#define SYS_shutdown 38
-#define SYS_slab_alloc 39
-#define SYS_slab_free 40
+#define SYS_shutdown 37
+#define SYS_slab_alloc 38
+#define SYS_slab_free 39

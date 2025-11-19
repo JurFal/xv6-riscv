@@ -5,6 +5,10 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
+#include "sleeplock.h"
+#include "fs.h"
+#include "file.h"
+#include "fcntl.h"
 
 struct cpu cpus[NCPU];
 
@@ -157,6 +161,11 @@ found:
   memset(&p->context, 0, sizeof(p->context));
   p->context.ra = (uint64)forkret;
   p->context.sp = p->kstack + PGSIZE;
+  // init mmap state
+  p->mmap_base = ((uint64)1<<30);
+  for(int i=0;i<NVMA;i++){
+    p->vmas[i].used = 0;
+  }
 
   // Initialize signal-related fields
   p->pending_signals = 0;
@@ -327,6 +336,27 @@ kfork(void)
       np->ofile[i] = filedup(p->ofile[i]);
   np->cwd = idup(p->cwd);
 
+  // inherit mmap regions
+  np->mmap_base = p->mmap_base;
+  for(i=0;i<NVMA;i++){
+    np->vmas[i] = p->vmas[i];
+    if(np->vmas[i].used && np->vmas[i].f){
+      np->vmas[i].f = filedup(np->vmas[i].f);
+    }
+  }
+#ifdef LAB_PGTBL
+  int vma_cnt = 0;
+  for(i=0;i<NVMA;i++) if(np->vmas[i].used) vma_cnt++;
+  printf("kfork: parent pid=%d child pid=%d mmap_base=0x%p vmas=%d\n", p->pid, np->pid, (void*)np->mmap_base, vma_cnt);
+  for(i=0;i<NVMA;i++){
+    if(np->vmas[i].used){
+      printf("  child vma[%d]: addr=0x%p len=%lu prot=0x%x flags=0x%x ip->size=%d\n",
+             i, (void*)np->vmas[i].addr, np->vmas[i].len, np->vmas[i].prot, np->vmas[i].flags,
+             np->vmas[i].f ? np->vmas[i].f->ip->size : -1);
+    }
+  }
+#endif
+
   safestrcpy(np->name, p->name, sizeof(p->name));
 
   pid = np->pid;
@@ -369,6 +399,41 @@ kexit(int status)
 
   if(p == initproc)
     panic("init exiting");
+
+  // write back and unmap mmap regions
+  for(int i=0;i<NVMA;i++){
+    if(p->vmas[i].used){
+      struct vma *v = &p->vmas[i];
+      if(v->flags & MAP_SHARED){
+        if(!(v->prot & PROT_WRITE)) {
+          // skip writeback for read-only mappings
+          printf("kexit: skip writeback for read-only mapping pid=%d\n", p->pid);
+        } else {
+          struct inode *ip = v->f->ip;
+          begin_op();
+          ilock(ip);
+          for(uint64 a = v->addr; a < v->addr + v->len; a += PGSIZE){
+            uint64 pa = walkaddr(p->pagetable, a);
+            if(pa){
+              uint off = (uint)((a - v->addr) + v->foff);
+              int n = PGSIZE;
+              if(off + n > ip->size) n = ip->size - off;
+              if(n > 0)
+                writei(ip, 0, pa, off, n);
+            }
+          }
+          iunlock(ip);
+          end_op();
+        }
+      }
+      // unmap and free
+      uvmunmap(p->pagetable, v->addr, v->len/PGSIZE, 1);
+      fileclose(v->f);
+      v->used = 0;
+    }
+  }
+  // flush TLB after unmapping all VMA regions
+  sfence_vma();
 
   // Close all open files.
   for(int fd = 0; fd < NOFILE; fd++){
@@ -728,6 +793,26 @@ procdump(void)
   }
 }
 
+// 内核线程的引导入口
+void
+kthread_entry()
+{
+  struct proc *p = myproc();
+
+  // 释放 proc.c:allocproc() 中持有的 p->lock
+  // 否则 kthread_func 尝试 sleep 或 exit 时会死锁
+  release(&p->lock);
+
+  // 执行真正的内核线程函数
+  if(p->kthread_func) {
+    p->kthread_func(p->kthread_arg);
+  }
+
+  // 线程函数返回后，自动退出
+  // 注意：kthread 的退出需要修改 exit()
+  kexit(0);
+}
+
 struct proc* kthread_create(void (*func)(void *), void *arg, char *name)
 {
   struct proc *p;
@@ -773,24 +858,4 @@ struct proc* kthread_create(void (*func)(void *), void *arg, char *name)
   release(&p->lock);
 
   return p;
-}
-
-// 内核线程的引导入口
-void
-kthread_entry()
-{
-  struct proc *p = myproc();
-
-  // 释放 proc.c:allocproc() 中持有的 p->lock
-  // 否则 kthread_func 尝试 sleep 或 exit 时会死锁
-  release(&p->lock);
-
-  // 执行真正的内核线程函数
-  if(p->kthread_func) {
-    p->kthread_func(p->kthread_arg);
-  }
-
-  // 线程函数返回后，自动退出
-  // 注意：kthread 的退出需要修改 exit()
-  exit(0);
 }
