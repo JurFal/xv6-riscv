@@ -39,8 +39,8 @@ main(int argc, char *argv[])
   pte_t before2 = (pte_t) pgpte((void*) (base + PGSIZE));
   printf("before collapse: PTE[base]=0x%lx PTE[base+PGSIZE]=0x%lx\n", before1, before2);
 
-  // 4) 等待 khugepaged 扫描与合并（tick ~0.1s），这里睡 3 秒
-  sleep(30);
+  // 4) 等待 khugepaged 扫描与合并（tick ~0.1s），这里暂停 3 秒
+  pause(30);
 
   // 5) 合并后再次检查，若变为同一 PTE 值，表示 L1 超页映射生效
   pte_t after1 = (pte_t) pgpte((void*) base);
