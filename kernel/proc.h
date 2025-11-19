@@ -113,4 +113,8 @@ struct proc {
   struct trapframe tf_backup;   // 保存陷阱帧 (注意：是结构体本身，不是指针)
   int tf_backup_valid;        // 标记 tf_backup 是否有效
   int stopped;                // 进程是否处于停止状态（SIGSTOP/SIGTSTP/TTIN/TTOU）
+#ifdef LAB_PGTBL
+  // Kernel pointer to per-process shared user syscall page
+  struct usyscall *usyscall;
+#endif
 };

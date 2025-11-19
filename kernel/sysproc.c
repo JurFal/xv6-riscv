@@ -1,11 +1,16 @@
 #include "types.h"
 #include "riscv.h"
-#include "defs.h"
 #include "param.h"
+#include "defs.h"
 #include "memlayout.h"
 #include "spinlock.h"
 #include "proc.h"
+#ifdef PGTBL_SOL
+#include "riscv.h"
+#endif
 #include "vm.h"
+#include "slab.h"
+#include "test_slab/slab_test.h"
 extern struct spinlock wait_lock; // from proc.c
 
 extern struct proc proc[NPROC];
@@ -96,6 +101,23 @@ sys_exit(void)
 }
 
 uint64
+sys_slab_alloc(void)
+{
+  int test_type;
+  argint(0, &test_type);
+  
+  // Run kernel-space slab tests
+  return run_slab_test(test_type);
+}
+
+uint64
+sys_slab_free(void)
+{
+  // This is now unused, but kept for compatibility
+  return 0;
+}
+
+uint64
 sys_getpid(void)
 {
   return myproc()->pid;
@@ -147,6 +169,7 @@ sys_pause(void)
   int n;
   uint ticks0;
 
+
   argint(0, &n);
   if(n < 0)
     n = 0;
@@ -162,6 +185,37 @@ sys_pause(void)
   release(&tickslock);
   return 0;
 }
+
+
+#ifdef LAB_PGTBL
+int
+sys_pgpte(void)
+{
+  uint64 va;
+  struct proc *p;  
+
+  p = myproc();
+  argaddr(0, &va);
+  pte_t *pte = pgpte(p->pagetable, va);
+  if(pte != 0) {
+      return (uint64) *pte;
+  }
+  return 0;
+}
+#endif
+
+#ifdef LAB_PGTBL
+int
+sys_kpgtbl(void)
+{
+  struct proc *p;  
+
+  p = myproc();
+  vmprint(p->pagetable);
+  return 0;
+}
+#endif
+
 
 uint64
 sys_kill(void)
@@ -285,4 +339,15 @@ sys_sigreturn(void)
   p->tf_backup_valid = 0;
   printf("[sigreturn] pid=%d restored trapframe, returning to epc=0x%lx\n", p->pid, p->trapframe->epc);
   return 0;
+uint64
+sys_shutdown(void)
+{
+  printf("System shutdown initiated by user process...\n");
+  printf("Goodbye! xv6 system is shutting down.\n");
+  printf("All processes will be terminated.\n");
+  
+  // Use panic to halt the system
+  panic("System shutdown requested");
+  
+  return 0;  // not reached
 }
