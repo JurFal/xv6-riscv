@@ -67,6 +67,9 @@ void*           kalloc(void);
 void            kfree(void *);
 void            kinit(void);
 
+// slab.c
+void            slab_init(void);
+
 // log.c
 void            initlog(int, struct superblock*);
 void            log_write(struct buf*);
@@ -108,6 +111,7 @@ void            yield(void);
 int             either_copyout(int user_dst, uint64 dst, void *src, uint64 len);
 int             either_copyin(void *dst, int user_src, uint64 src, uint64 len);
 void            procdump(void);
+struct proc*    kthread_create(void (*func)(void *), void *arg, char *name);
 
 // swtch.S
 void            swtch(struct context*, struct context*);
@@ -190,6 +194,9 @@ void            vmprint(pagetable_t);
 #endif
 #ifdef LAB_PGTBL
 pte_t*          pgpte(pagetable_t, uint64);
+void *          superalloc(void);
+void            superfree(void *);
+int             mappages_super(pagetable_t, uint64, uint64, uint64, int);
 #endif
 
 // plic.c

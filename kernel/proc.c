@@ -136,6 +136,18 @@ found:
     return 0;
   }
 
+#ifdef LAB_PGTBL
+  // Allocate and initialize per-process shared syscall page.
+  p->usyscall = (struct usyscall *)kalloc();
+  if(p->usyscall == 0){
+    freeproc(p);
+    release(&p->lock);
+    return 0;
+  }
+  memset(p->usyscall, 0, PGSIZE);
+  p->usyscall->pid = p->pid;
+#endif
+
   // An empty user page table.
   p->pagetable = proc_pagetable(p);
   if(p->pagetable == 0){
@@ -155,6 +167,15 @@ found:
     p->vmas[i].used = 0;
   }
 
+  // Initialize signal-related fields
+  p->pending_signals = 0;
+  p->handlers_registered = 0;
+  p->tf_backup_valid = 0;
+  p->stopped = 0;
+  for(int si = 0; si < NSIG; si++) {
+    p->handlers[si] = 0;
+  }
+
   return p;
 }
 
@@ -170,6 +191,11 @@ freeproc(struct proc *p)
   if(p->pagetable)
     proc_freepagetable(p->pagetable, p->sz);
   p->pagetable = 0;
+#ifdef LAB_PGTBL
+  if(p->usyscall)
+    kfree((void*)p->usyscall);
+  p->usyscall = 0;
+#endif
   p->sz = 0;
   p->pid = 0;
   p->parent = 0;
@@ -211,6 +237,17 @@ proc_pagetable(struct proc *p)
     return 0;
   }
 
+#ifdef LAB_PGTBL
+  // Map the shared user syscall page just below the trapframe page.
+  if(mappages(pagetable, USYSCALL, PGSIZE,
+              (uint64)(p->usyscall), PTE_R | PTE_U) < 0){
+    uvmunmap(pagetable, TRAPFRAME, 1, 0);
+    uvmunmap(pagetable, TRAMPOLINE, 1, 0);
+    uvmfree(pagetable, 0);
+    return 0;
+  }
+#endif
+
   return pagetable;
 }
 
@@ -221,6 +258,9 @@ proc_freepagetable(pagetable_t pagetable, uint64 sz)
 {
   uvmunmap(pagetable, TRAMPOLINE, 1, 0);
   uvmunmap(pagetable, TRAPFRAME, 1, 0);
+#ifdef LAB_PGTBL
+  uvmunmap(pagetable, USYSCALL, 1, 0);
+#endif
   uvmfree(pagetable, sz);
 }
 
@@ -268,6 +308,8 @@ kfork(void)
   int i, pid;
   struct proc *np;
   struct proc *p = myproc();
+
+  if(p->is_kthread) panic("kthread fork");
 
   // Allocate process.
   if((np = allocproc()) == 0){
@@ -749,4 +791,71 @@ procdump(void)
     printf("%d %s %s", p->pid, state, p->name);
     printf("\n");
   }
+}
+
+struct proc* kthread_create(void (*func)(void *), void *arg, char *name)
+{
+  struct proc *p;
+
+  // 1. 分配一个 proc 结构体
+  p = allocproc();
+  if(p == 0)
+    return 0;
+
+  // 2. 设置为内核线程
+  p->is_kthread = 1;
+  p->kthread_func = func;
+  p->kthread_arg = arg;
+  safestrcpy(p->name, name, sizeof(p->name));
+
+  // 3. 内核线程没有用户页表
+  // allocproc() 默认创建了内核页表 (p->pagetable = proc_pagetable(p))
+  // 我们不需要用户映射，所以 p->sz 保持为 0
+  p->sz = 0; 
+  // 也不需要 p->pagetable = proc_pagetable(p) 之后的用户空间设置
+
+  // 4. 设置内核栈和上下文
+  // kstack 已经在 allocproc() 中分配
+  // 我们需要伪造一个 trapframe，以便 "返回" 到内核函数
+  
+  // 清空 trapframe
+  memset(p->trapframe, 0, sizeof(struct trapframe));
+
+  // 5. 设置执行入口 (epc)
+  // 当 kthread 第一次被调度时，swtch() 会返回到 kthread_entry
+  // 我们设置一个 "引导" 函数 kthread_entry，由它来调用真正的线程函数
+  
+  // swtch() 返回时会执行 ra (return address)
+  // 我们将 ra 设置为 kthread_entry
+  p->context.ra = (uint64)kthread_entry;
+  
+  // swtch() 会加载 kstack 作为栈顶
+  p->context.sp = p->kstack + PGSIZE;
+
+  // 6. 设置为 RUNNABLE 状态，等待调度器调度
+  acquire(&p->lock);
+  p->state = RUNNABLE;
+  release(&p->lock);
+
+  return p;
+}
+
+// 内核线程的引导入口
+void
+kthread_entry()
+{
+  struct proc *p = myproc();
+
+  // 释放 proc.c:allocproc() 中持有的 p->lock
+  // 否则 kthread_func 尝试 sleep 或 exit 时会死锁
+  release(&p->lock);
+
+  // 执行真正的内核线程函数
+  if(p->kthread_func) {
+    p->kthread_func(p->kthread_arg);
+  }
+
+  // 线程函数返回后，自动退出
+  // 注意：kthread 的退出需要修改 exit()
+  exit(0);
 }

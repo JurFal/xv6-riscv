@@ -29,6 +29,9 @@ int getpid(void);
 char* sys_sbrk(int,int);
 int pause(int);
 int uptime(void);
+int signal(int signum, void (*handler)(int));
+int sigsend(int pid, int signum);
+int sigreturn(void);
 #ifdef LAB_NET
 int bind(uint16);
 int unbind(uint16);
@@ -42,6 +45,9 @@ void kpgtbl(void);
 #endif
 char* mmap(void* addr, int len, int prot, int flags, int fd, int offset);
 int munmap(void* addr, int len);
+int shutdown(void);
+void* slab_alloc(int size);
+int slab_free(void* ptr);
 
 // ulib.c
 int stat(const char*, struct stat*);

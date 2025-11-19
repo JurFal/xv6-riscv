@@ -20,8 +20,6 @@
 #define SYS_link   19
 #define SYS_mkdir  20
 #define SYS_close  21
-
-// System calls for labs
 #define SYS_trace     22
 #define SYS_interpose 23
 #define SYS_sigalarm  24
@@ -35,3 +33,9 @@
 #define SYS_recv      32
 #define SYS_pgpte     33
 #define SYS_kpgtbl    34
+#define SYS_signal 35
+#define SYS_sigsend 36
+#define SYS_sigreturn 37
+#define SYS_shutdown 38
+#define SYS_slab_alloc 39
+#define SYS_slab_free 40
