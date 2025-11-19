@@ -22,16 +22,24 @@
 #define SYS_close  21
 
 // System calls for labs
-#define SYS_trace     22
-#define SYS_interpose 23
-#define SYS_sigalarm  24
-#define SYS_sigreturn 25
-#define SYS_symlink   26
-#define SYS_mmap      27
-#define SYS_munmap    28
-#define SYS_bind      29
-#define SYS_unbind    30
-#define SYS_send      31
-#define SYS_recv      32
-#define SYS_pgpte     33
-#define SYS_kpgtbl    34
+
+#ifdef LAB_PGTBL
+  #define SYS_trace     22
+  #define SYS_interpose 23
+  #define SYS_sigalarm  24
+  #define SYS_sigreturn 25
+  #define SYS_symlink   26
+  #define SYS_mmap      27
+  #define SYS_munmap    28
+  #define SYS_bind      29
+  #define SYS_unbind    30
+  #define SYS_send      31
+  #define SYS_recv      32
+  #define SYS_pgpte     33
+  #define SYS_kpgtbl    34
+#endif
+#ifdef LAB_SLAB
+  #define SYS_shutdown 22
+  #define SYS_slab_alloc 23
+  #define SYS_slab_free 24
+#endif

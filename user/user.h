@@ -40,6 +40,9 @@ int ugetpid(void);
 uint64 pgpte(void*);
 void kpgtbl(void);
 #endif
+int shutdown(void);
+void* slab_alloc(int size);
+int slab_free(void* ptr);
 
 // ulib.c
 int stat(const char*, struct stat*);

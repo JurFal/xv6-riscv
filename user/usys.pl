@@ -48,3 +48,6 @@ entry("send");
 entry("recv");
 entry("pgpte");
 entry("kpgtbl");
+entry("shutdown");
+entry("slab_alloc");
+entry("slab_free");

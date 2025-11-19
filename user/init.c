@@ -10,6 +10,7 @@
 #include "kernel/fcntl.h"
 
 char *argv[] = { "sh", 0 };
+char *test_argv[] = { "slabtest", 0 };
 
 int
 main(void)
@@ -22,6 +23,21 @@ main(void)
   }
   dup(0);  // stdout
   dup(0);  // stderr
+
+  // Run slabtest automatically on startup
+  printf("init: running slab allocator tests\n");
+  pid = fork();
+  if(pid < 0){
+    printf("init: fork failed for slabtest\n");
+  } else if(pid == 0){
+    exec("slabtest", test_argv);
+    printf("init: exec slabtest failed\n");
+    exit(1);
+  } else {
+    // Wait for slabtest to complete
+    wait((int *) 0);
+    printf("init: slab tests completed\n");
+  }
 
   for(;;){
     printf("init: starting sh\n");

@@ -9,6 +9,8 @@
 #include "riscv.h"
 #endif
 #include "vm.h"
+#include "slab.h"
+#include "test_slab/slab_test.h"
 
 uint64
 sys_exit(void)
@@ -17,6 +19,23 @@ sys_exit(void)
   argint(0, &n);
   kexit(n);
   return 0;  // not reached
+}
+
+uint64
+sys_slab_alloc(void)
+{
+  int test_type;
+  argint(0, &test_type);
+  
+  // Run kernel-space slab tests
+  return run_slab_test(test_type);
+}
+
+uint64
+sys_slab_free(void)
+{
+  // This is now unused, but kept for compatibility
+  return 0;
 }
 
 uint64
@@ -139,4 +158,17 @@ sys_uptime(void)
   xticks = ticks;
   release(&tickslock);
   return xticks;
+}
+
+uint64
+sys_shutdown(void)
+{
+  printf("System shutdown initiated by user process...\n");
+  printf("Goodbye! xv6 system is shutting down.\n");
+  printf("All processes will be terminated.\n");
+  
+  // Use panic to halt the system
+  panic("System shutdown requested");
+  
+  return 0;  // not reached
 }

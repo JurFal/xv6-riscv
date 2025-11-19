@@ -30,7 +30,11 @@ OBJS = \
   $K/sysfile.o \
   $K/kernelvec.o \
   $K/plic.o \
-  $K/virtio_disk.o
+  $K/virtio_disk.o \
+  $K/slab.o \
+  $K/test_slab/slab_stats.o \
+  $K/test_slab/slab_test.o \
+  $K/test_slab/baseline.o
 
 OBJS_KCSAN = \
   $K/start.o \
@@ -179,6 +183,7 @@ mkfs/mkfs: mkfs/mkfs.c $K/fs.h $K/param.h
 UPROGS=\
 	$U/_cat\
 	$U/_echo\
+	$U/_exit\
 	$U/_forktest\
 	$U/_grep\
 	$U/_init\
@@ -196,6 +201,7 @@ UPROGS=\
 	$U/_logstress\
 	$U/_forphan\
 	$U/_dorphan\
+	$U/_slabtest\
 
 
 
