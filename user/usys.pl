@@ -42,3 +42,6 @@ entry("getpid");
 entry("sbrk");
 entry("pause");
 entry("uptime");
+entry("shutdown");
+entry("slab_alloc");
+entry("slab_free");

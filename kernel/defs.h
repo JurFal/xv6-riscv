@@ -60,6 +60,9 @@ void*           kalloc(void);
 void            kfree(void *);
 void            kinit(void);
 
+// slab.c
+void            slab_init(void);
+
 // log.c
 void            initlog(int, struct superblock*);
 void            log_write(struct buf*);
