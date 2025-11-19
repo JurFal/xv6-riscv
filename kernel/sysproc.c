@@ -339,6 +339,8 @@ sys_sigreturn(void)
   p->tf_backup_valid = 0;
   printf("[sigreturn] pid=%d restored trapframe, returning to epc=0x%lx\n", p->pid, p->trapframe->epc);
   return 0;
+}
+
 uint64
 sys_shutdown(void)
 {

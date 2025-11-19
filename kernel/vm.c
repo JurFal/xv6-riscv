@@ -108,6 +108,11 @@ walk(pagetable_t pagetable, uint64 va, int alloc)
   for(int level = 2; level > 0; level--) {
     pte_t *pte = &pagetable[PX(level, va)];
     if(*pte & PTE_V) {
+#ifdef LAB_PGTBL
+      // If this entry is a leaf at an upper level (superpage), return it.
+      if(PTE_LEAF(*pte))
+        return pte;
+#endif
       pagetable = (pagetable_t)PTE2PA(*pte);
     } else {
       if(!alloc)
@@ -155,16 +160,6 @@ walkaddr(pagetable_t pagetable, uint64 va)
   return pa;
 }
 
-
-#if defined(LAB_PGTBL) || defined(SOL_MMAP) || defined(SOL_COW)
-void
-vmprint(pagetable_t pagetable) {
-  // your code here
-}
-#endif
-
-  return PTE2PA(*pte);
-}
 
 // Copy a null-terminated string from user to kernel.
 // Copy bytes to dst from virtual address srcva in a given page table.

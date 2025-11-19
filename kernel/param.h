@@ -13,5 +13,7 @@
 #define MAXPATH      128   // maximum file path name
 #define USERSTACK    1     // user stack pages
 // maximum number of signals supported
+#ifndef NSIG
 #define NSIG         32
+#endif
 

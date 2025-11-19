@@ -793,6 +793,26 @@ procdump(void)
   }
 }
 
+// 内核线程的引导入口
+void
+kthread_entry()
+{
+  struct proc *p = myproc();
+
+  // 释放 proc.c:allocproc() 中持有的 p->lock
+  // 否则 kthread_func 尝试 sleep 或 exit 时会死锁
+  release(&p->lock);
+
+  // 执行真正的内核线程函数
+  if(p->kthread_func) {
+    p->kthread_func(p->kthread_arg);
+  }
+
+  // 线程函数返回后，自动退出
+  // 注意：kthread 的退出需要修改 exit()
+  kexit(0);
+}
+
 struct proc* kthread_create(void (*func)(void *), void *arg, char *name)
 {
   struct proc *p;
@@ -838,24 +858,4 @@ struct proc* kthread_create(void (*func)(void *), void *arg, char *name)
   release(&p->lock);
 
   return p;
-}
-
-// 内核线程的引导入口
-void
-kthread_entry()
-{
-  struct proc *p = myproc();
-
-  // 释放 proc.c:allocproc() 中持有的 p->lock
-  // 否则 kthread_func 尝试 sleep 或 exit 时会死锁
-  release(&p->lock);
-
-  // 执行真正的内核线程函数
-  if(p->kthread_func) {
-    p->kthread_func(p->kthread_arg);
-  }
-
-  // 线程函数返回后，自动退出
-  // 注意：kthread 的退出需要修改 exit()
-  exit(0);
 }
