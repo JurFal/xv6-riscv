@@ -104,4 +104,8 @@ struct proc {
   struct file *ofile[NOFILE];  // Open files
   struct inode *cwd;           // Current directory
   char name[16];               // Process name (debugging)
+
+  int is_kthread;           // 标志位：1 表示为内核线程，0 表示为普通进程
+  void (*kthread_func)(void *); // 内核线程的入口函数
+  void *kthread_arg;        // 内核线程的参数
 };
