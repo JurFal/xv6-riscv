@@ -508,6 +508,15 @@ readi(struct inode *ip, int user_dst, uint64 dst, uint off, uint n)
       break;
     bp = bread(ip->dev, addr);
     m = min(n - tot, BSIZE - off%BSIZE);
+#ifdef LAB_PGTBL
+    // Debug: sample data being read from disk buffer at current offset
+    /* int o = off % BSIZE;
+    int s0 = bp->data[o];
+    int s512 = (o + 512 < BSIZE) ? bp->data[o + 512] : -1;
+    int s1024 = (o + 1024 < BSIZE) ? bp->data[o + 1024] : -1;
+    printf("readi: inum=%d blk=%u off=%u m=%u samples=[0]=0x%x [512]=0x%x [1024]=0x%x\n",
+           ip->inum, addr, off, m, s0, s512, s1024); */
+#endif
     if(either_copyout(user_dst, dst, bp->data + (off % BSIZE), m) == -1) {
       brelse(bp);
       tot = -1;
@@ -546,6 +555,15 @@ writei(struct inode *ip, int user_src, uint64 src, uint off, uint n)
       brelse(bp);
       break;
     }
+#ifdef LAB_PGTBL
+    // Debug: sample data being written into disk buffer at current offset
+    /*int o = off % BSIZE;
+    int s0 = bp->data[o];
+    int s512 = (o + 512 < BSIZE) ? bp->data[o + 512] : -1;
+    int s1024 = (o + 1024 < BSIZE) ? bp->data[o + 1024] : -1;
+    printf("writei: inum=%d blk=%u off=%u m=%u samples=[0]=0x%x [512]=0x%x [1024]=0x%x\n",
+           ip->inum, addr, off, m, s0, s512, s1024);*/
+#endif
     log_write(bp);
     brelse(bp);
   }
