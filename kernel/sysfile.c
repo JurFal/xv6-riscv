@@ -248,8 +248,10 @@ create(char *path, short type, short major, short minor)
   struct inode *ip, *dp;
   char name[DIRSIZ];
 
-  if((dp = nameiparent(path, name)) == 0)
+  if((dp = nameiparent(path, name)) == 0){
+    printf("create: nameiparent failed for %s\n", path);
     return 0;
+  }
 
   ilock(dp);
 
@@ -259,10 +261,12 @@ create(char *path, short type, short major, short minor)
     if(type == T_FILE && (ip->type == T_FILE || ip->type == T_DEVICE))
       return ip;
     iunlockput(ip);
+    printf("create: dirlookup found %s\n", name);
     return 0;
   }
 
   if((ip = ialloc(dp->dev, type)) == 0){
+    printf("create: ialloc failed\n");
     iunlockput(dp);
     return 0;
   }
@@ -302,6 +306,32 @@ create(char *path, short type, short major, short minor)
 }
 
 uint64
+sys_symlink(void)
+{
+  char target[MAXPATH], path[MAXPATH];
+  struct inode *ip;
+
+  if(argstr(0, target, MAXPATH) < 0 || argstr(1, path, MAXPATH) < 0)
+    return -1;
+
+  begin_op();
+  if((ip = create(path, T_SYMLINK, 0, 0)) == 0){
+    printf("sys_symlink: create failed for %s\n", path);
+    end_op();
+    return -1;
+  }
+  if(writei(ip, 0, (uint64)target, 0, strlen(target) + 1) < 0) {
+    printf("sys_symlink: writei failed\n");
+    iunlockput(ip);
+    end_op();
+    return -1;
+  }
+  iunlockput(ip);
+  end_op();
+  return 0;
+}
+
+uint64
 sys_open(void)
 {
   char path[MAXPATH];
@@ -328,6 +358,28 @@ sys_open(void)
       return -1;
     }
     ilock(ip);
+    if(ip->type == T_SYMLINK && !(omode & O_NOFOLLOW)){
+      int depth = 0;
+      while(ip->type == T_SYMLINK){
+        if(depth >= 10){
+          iunlockput(ip);
+          end_op();
+          return -1;
+        }
+        if(readi(ip, 0, (uint64)path, 0, MAXPATH) < 0){
+          iunlockput(ip);
+          end_op();
+          return -1;
+        }
+        iunlockput(ip);
+        if((ip = namei(path)) == 0){
+          end_op();
+          return -1;
+        }
+        ilock(ip);
+        depth++;
+      }
+    }
     if(ip->type == T_DIR && omode != O_RDONLY){
       iunlockput(ip);
       end_op();

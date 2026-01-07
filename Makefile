@@ -143,6 +143,7 @@ UPROGS=\
 	$U/_forphan\
 	$U/_dorphan\
 	$U/_bigwrite\
+	$U/_symlinktest\
 
 fs.img: mkfs/mkfs README $(UPROGS)
 	mkfs/mkfs fs.img README $(UPROGS)
