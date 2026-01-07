@@ -316,12 +316,10 @@ sys_symlink(void)
 
   begin_op();
   if((ip = create(path, T_SYMLINK, 0, 0)) == 0){
-    printf("sys_symlink: create failed for %s\n", path);
     end_op();
     return -1;
   }
   if(writei(ip, 0, (uint64)target, 0, strlen(target) + 1) < 0) {
-    printf("sys_symlink: writei failed\n");
     iunlockput(ip);
     end_op();
     return -1;

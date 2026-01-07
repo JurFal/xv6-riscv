@@ -89,9 +89,21 @@ nofollow(void)
     close(fd);
 }
 
+static void
+cleanup(void)
+{
+  unlink("real");
+  unlink("mylink");
+  unlink("dangling");
+  unlink("c1");
+  unlink("c2");
+  unlink("link2");
+}
+
 int
 main(void)
 {
+  cleanup();
   basic();
   dangling();
   circular();
