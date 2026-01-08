@@ -144,6 +144,8 @@ UPROGS=\
 	$U/_dorphan\
 	$U/_bigwrite\
 	$U/_symlinktest\
+	$U/_longnametest\
+	$U/_hardlinktest\
 
 fs.img: mkfs/mkfs README $(UPROGS)
 	mkfs/mkfs fs.img README $(UPROGS)

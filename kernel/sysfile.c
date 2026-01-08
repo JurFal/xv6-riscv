@@ -190,7 +190,7 @@ sys_unlink(void)
 {
   struct inode *ip, *dp;
   struct dirent de;
-  char name[DIRSIZ], path[MAXPATH];
+  char name[MAXPATH], path[MAXPATH];
   uint off;
 
   if(argstr(0, path, MAXPATH) < 0)
@@ -222,6 +222,16 @@ sys_unlink(void)
   memset(&de, 0, sizeof(de));
   if(writei(dp, 0, (uint64)&de, off, sizeof(de)) != sizeof(de))
     panic("unlink: writei");
+  while(off >= sizeof(de)){
+    off -= sizeof(de);
+    if(readi(dp, 0, (uint64)&de, off, sizeof(de)) != sizeof(de))
+      panic("unlink: readi");
+    if(de.inum != 0xFFFF)
+      break;
+    memset(&de, 0, sizeof(de));
+    if(writei(dp, 0, (uint64)&de, off, sizeof(de)) != sizeof(de))
+      panic("unlink: writei");
+  }
   if(ip->type == T_DIR){
     dp->nlink--;
     iupdate(dp);
@@ -246,7 +256,7 @@ static struct inode*
 create(char *path, short type, short major, short minor)
 {
   struct inode *ip, *dp;
-  char name[DIRSIZ];
+  char name[MAXPATH];
 
   if((dp = nameiparent(path, name)) == 0){
     printf("create: nameiparent failed for %s\n", path);
