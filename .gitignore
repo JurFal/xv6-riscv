@@ -15,4 +15,17 @@ mkfs/mkfs
 kernel/kernel
 user/usys.S
 .gdbinit
+*.zip
+xv6.out*
+.vagrant/
+submissions/
+ph
+barrier
+/lab-*.json
+.DS_Store
+*.dSYM
+*.pcap
 TAGS
+
+.vscode/settings.json
+fs.img.bk

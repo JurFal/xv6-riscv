@@ -23,10 +23,23 @@ struct {
   struct run *freelist;
 } kmem;
 
+#ifdef LAB_PGTBL
+#define NSUPER 8
+struct {
+  struct spinlock lock;
+  void *pages[NSUPER];
+  int count;
+} supermem;
+#endif
+
 void
 kinit()
 {
   initlock(&kmem.lock, "kmem");
+#ifdef LAB_PGTBL
+  initlock(&supermem.lock, "supermem");
+  supermem.count = 0;
+#endif
   freerange(end, (void*)PHYSTOP);
 }
 
@@ -35,8 +48,22 @@ freerange(void *pa_start, void *pa_end)
 {
   char *p;
   p = (char*)PGROUNDUP((uint64)pa_start);
+#ifdef LAB_PGTBL
+  for(; p + PGSIZE <= (char*)pa_end; ){
+    if(supermem.count < NSUPER && (((uint64)p % SUPERPGSIZE) == 0) && (p + SUPERPGSIZE) <= (char*)pa_end){
+      acquire(&supermem.lock);
+      supermem.pages[supermem.count++] = (void*)p;
+      release(&supermem.lock);
+      p += SUPERPGSIZE;
+      continue;
+    }
+    kfree(p);
+    p += PGSIZE;
+  }
+#else
   for(; p + PGSIZE <= (char*)pa_end; p += PGSIZE)
     kfree(p);
+#endif
 }
 
 // Free the page of physical memory pointed at by pa,
@@ -80,3 +107,39 @@ kalloc(void)
     memset((char*)r, 5, PGSIZE); // fill with junk
   return (void*)r;
 }
+
+#ifdef LAB_PGTBL
+void *
+superalloc(void)
+{
+  void *p = 0;
+  acquire(&supermem.lock);
+  if(supermem.count > 0){
+    p = supermem.pages[--supermem.count];
+  }
+  release(&supermem.lock);
+  if(p)
+    memset(p, 5, SUPERPGSIZE);
+  return p;
+}
+
+void
+superfree(void *pa)
+{
+  if(((uint64)pa % SUPERPGSIZE) != 0 || (char*)pa < end || (uint64)pa + SUPERPGSIZE > PHYSTOP)
+    panic("superfree");
+  acquire(&supermem.lock);
+  if(supermem.count < NSUPER){
+    supermem.pages[supermem.count++] = pa;
+  } else {
+    // If pool full, fall back to returning to regular allocator.
+    // Break 2MB into 4KB pages and free them.
+    release(&supermem.lock);
+    for(char *p = (char*)pa; p < (char*)pa + SUPERPGSIZE; p += PGSIZE){
+      kfree(p);
+    }
+    return;
+  }
+  release(&supermem.lock);
+}
+#endif

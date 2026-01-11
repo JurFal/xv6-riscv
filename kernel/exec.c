@@ -35,6 +35,8 @@ kexec(char *path, char **argv)
   pagetable_t pagetable = 0, oldpagetable;
   struct proc *p = myproc();
 
+  if(p->is_kthread) panic("kthread exec");
+
   begin_op();
 
   // Open the executable file.

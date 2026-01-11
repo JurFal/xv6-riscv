@@ -79,6 +79,18 @@ struct trapframe {
   /* 280 */ uint64 t6;
 };
 
+#define NVMA 16
+
+struct vma {
+  uint64 addr;    // start address (page-aligned)
+  uint64 len;     // length in bytes
+  uint64 foff;    // file offset for start (kept in sync on shrink)
+  int prot;       // PROT flags
+  int flags;      // MAP_SHARED or MAP_PRIVATE
+  struct file *f; // file being mapped
+  int used;       // non-zero if valid
+};
+
 enum procstate { UNUSED, USED, SLEEPING, RUNNABLE, RUNNING, ZOMBIE };
 
 // Per-process state
@@ -104,4 +116,22 @@ struct proc {
   struct file *ofile[NOFILE];  // Open files
   struct inode *cwd;           // Current directory
   char name[16];               // Process name (debugging)
+  struct vma vmas[NVMA];       // mmap regions
+  uint64 mmap_base;            // base address for next mmap
+
+  int is_kthread;           // 标志位：1 表示为内核线程，0 表示为普通进程
+  void (*kthread_func)(void *); // 内核线程的入口函数
+  void *kthread_arg;        // 内核线程的参数
+
+  // --- 新增信号相关字段 ---
+  uint pending_signals;         // 待处理信号的位掩码 (例如，第 2 位为 1 表示收到了 SIGINT)
+  uint handlers_registered;     // 已注册处理器的位掩码（允许地址为 0 的处理器）
+  void (*handlers[NSIG])(int); // 信号处理函数指针数组 (NSIG 是最大信号数量，比如 32)
+  struct trapframe tf_backup;   // 保存陷阱帧 (注意：是结构体本身，不是指针)
+  int tf_backup_valid;        // 标记 tf_backup 是否有效
+  int stopped;                // 进程是否处于停止状态（SIGSTOP/SIGTSTP/TTIN/TTOU）
+#ifdef LAB_PGTBL
+  // Kernel pointer to per-process shared user syscall page
+  struct usyscall *usyscall;
+#endif
 };

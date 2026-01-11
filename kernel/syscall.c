@@ -6,6 +6,9 @@
 #include "proc.h"
 #include "syscall.h"
 #include "defs.h"
+#include "fs.h"
+#include "sleeplock.h"
+#include "file.h"
 
 // Fetch the uint64 at addr from the current process.
 int
@@ -102,6 +105,25 @@ extern uint64 sys_link(void);
 extern uint64 sys_mkdir(void);
 extern uint64 sys_close(void);
 extern uint64 sys_symlink(void);
+extern uint64 sys_mmap(void);
+extern uint64 sys_munmap(void);
+extern uint64 sys_signal(void);
+extern uint64 sys_sigsend(void);
+extern uint64 sys_sigreturn(void);
+extern uint64 sys_shutdown(void);
+extern uint64 sys_slab_alloc(void);
+extern uint64 sys_slab_free(void);
+
+#ifdef LAB_NET
+extern uint64 sys_bind(void);
+extern uint64 sys_unbind(void);
+extern uint64 sys_send(void);
+extern uint64 sys_recv(void);
+#endif
+#ifdef LAB_PGTBL
+extern uint64 sys_pgpte(void);
+extern uint64 sys_kpgtbl(void);
+#endif
 
 // An array mapping syscall numbers from syscall.h
 // to the function that handles the system call.
@@ -128,7 +150,26 @@ static uint64 (*syscalls[])(void) = {
 [SYS_mkdir]   sys_mkdir,
 [SYS_close]   sys_close,
 [SYS_symlink] sys_symlink,
+[SYS_mmap]    sys_mmap,
+[SYS_munmap]  sys_munmap,
+[SYS_signal]  sys_signal,
+[SYS_sigsend] sys_sigsend,
+[SYS_sigreturn] sys_sigreturn,
+#ifdef LAB_NET
+[SYS_bind] sys_bind,
+[SYS_unbind] sys_unbind,
+[SYS_send] sys_send,
+[SYS_recv] sys_recv,
+#endif
+#ifdef LAB_PGTBL
+[SYS_pgpte] sys_pgpte,
+[SYS_kpgtbl] sys_kpgtbl,
+#endif
+[SYS_shutdown] sys_shutdown,
+[SYS_slab_alloc] sys_slab_alloc,
+[SYS_slab_free] sys_slab_free,
 };
+
 
 void
 syscall(void)

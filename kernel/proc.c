@@ -5,6 +5,10 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
+#include "sleeplock.h"
+#include "fs.h"
+#include "file.h"
+#include "fcntl.h"
 
 struct cpu cpus[NCPU];
 
@@ -132,6 +136,18 @@ found:
     return 0;
   }
 
+#ifdef LAB_PGTBL
+  // Allocate and initialize per-process shared syscall page.
+  p->usyscall = (struct usyscall *)kalloc();
+  if(p->usyscall == 0){
+    freeproc(p);
+    release(&p->lock);
+    return 0;
+  }
+  memset(p->usyscall, 0, PGSIZE);
+  p->usyscall->pid = p->pid;
+#endif
+
   // An empty user page table.
   p->pagetable = proc_pagetable(p);
   if(p->pagetable == 0){
@@ -145,6 +161,20 @@ found:
   memset(&p->context, 0, sizeof(p->context));
   p->context.ra = (uint64)forkret;
   p->context.sp = p->kstack + PGSIZE;
+  // init mmap state
+  p->mmap_base = ((uint64)1<<30);
+  for(int i=0;i<NVMA;i++){
+    p->vmas[i].used = 0;
+  }
+
+  // Initialize signal-related fields
+  p->pending_signals = 0;
+  p->handlers_registered = 0;
+  p->tf_backup_valid = 0;
+  p->stopped = 0;
+  for(int si = 0; si < NSIG; si++) {
+    p->handlers[si] = 0;
+  }
 
   return p;
 }
@@ -161,6 +191,11 @@ freeproc(struct proc *p)
   if(p->pagetable)
     proc_freepagetable(p->pagetable, p->sz);
   p->pagetable = 0;
+#ifdef LAB_PGTBL
+  if(p->usyscall)
+    kfree((void*)p->usyscall);
+  p->usyscall = 0;
+#endif
   p->sz = 0;
   p->pid = 0;
   p->parent = 0;
@@ -202,6 +237,17 @@ proc_pagetable(struct proc *p)
     return 0;
   }
 
+#ifdef LAB_PGTBL
+  // Map the shared user syscall page just below the trapframe page.
+  if(mappages(pagetable, USYSCALL, PGSIZE,
+              (uint64)(p->usyscall), PTE_R | PTE_U) < 0){
+    uvmunmap(pagetable, TRAPFRAME, 1, 0);
+    uvmunmap(pagetable, TRAMPOLINE, 1, 0);
+    uvmfree(pagetable, 0);
+    return 0;
+  }
+#endif
+
   return pagetable;
 }
 
@@ -212,6 +258,9 @@ proc_freepagetable(pagetable_t pagetable, uint64 sz)
 {
   uvmunmap(pagetable, TRAMPOLINE, 1, 0);
   uvmunmap(pagetable, TRAPFRAME, 1, 0);
+#ifdef LAB_PGTBL
+  uvmunmap(pagetable, USYSCALL, 1, 0);
+#endif
   uvmfree(pagetable, sz);
 }
 
@@ -260,6 +309,8 @@ kfork(void)
   struct proc *np;
   struct proc *p = myproc();
 
+  if(p->is_kthread) panic("kthread fork");
+
   // Allocate process.
   if((np = allocproc()) == 0){
     return -1;
@@ -284,6 +335,27 @@ kfork(void)
     if(p->ofile[i])
       np->ofile[i] = filedup(p->ofile[i]);
   np->cwd = idup(p->cwd);
+
+  // inherit mmap regions
+  np->mmap_base = p->mmap_base;
+  for(i=0;i<NVMA;i++){
+    np->vmas[i] = p->vmas[i];
+    if(np->vmas[i].used && np->vmas[i].f){
+      np->vmas[i].f = filedup(np->vmas[i].f);
+    }
+  }
+#ifdef LAB_PGTBL
+  int vma_cnt = 0;
+  for(i=0;i<NVMA;i++) if(np->vmas[i].used) vma_cnt++;
+  printf("kfork: parent pid=%d child pid=%d mmap_base=0x%p vmas=%d\n", p->pid, np->pid, (void*)np->mmap_base, vma_cnt);
+  for(i=0;i<NVMA;i++){
+    if(np->vmas[i].used){
+      printf("  child vma[%d]: addr=0x%p len=%lu prot=0x%x flags=0x%x ip->size=%d\n",
+             i, (void*)np->vmas[i].addr, np->vmas[i].len, np->vmas[i].prot, np->vmas[i].flags,
+             np->vmas[i].f ? np->vmas[i].f->ip->size : -1);
+    }
+  }
+#endif
 
   safestrcpy(np->name, p->name, sizeof(p->name));
 
@@ -327,6 +399,41 @@ kexit(int status)
 
   if(p == initproc)
     panic("init exiting");
+
+  // write back and unmap mmap regions
+  for(int i=0;i<NVMA;i++){
+    if(p->vmas[i].used){
+      struct vma *v = &p->vmas[i];
+      if(v->flags & MAP_SHARED){
+        if(!(v->prot & PROT_WRITE)) {
+          // skip writeback for read-only mappings
+          printf("kexit: skip writeback for read-only mapping pid=%d\n", p->pid);
+        } else {
+          struct inode *ip = v->f->ip;
+          begin_op();
+          ilock(ip);
+          for(uint64 a = v->addr; a < v->addr + v->len; a += PGSIZE){
+            uint64 pa = walkaddr(p->pagetable, a);
+            if(pa){
+              uint off = (uint)((a - v->addr) + v->foff);
+              int n = PGSIZE;
+              if(off + n > ip->size) n = ip->size - off;
+              if(n > 0)
+                writei(ip, 0, pa, off, n);
+            }
+          }
+          iunlock(ip);
+          end_op();
+        }
+      }
+      // unmap and free
+      uvmunmap(p->pagetable, v->addr, v->len/PGSIZE, 1);
+      fileclose(v->f);
+      v->used = 0;
+    }
+  }
+  // flush TLB after unmapping all VMA regions
+  sfence_vma();
 
   // Close all open files.
   for(int fd = 0; fd < NOFILE; fd++){
@@ -684,4 +791,71 @@ procdump(void)
     printf("%d %s %s", p->pid, state, p->name);
     printf("\n");
   }
+}
+
+// 内核线程的引导入口
+void
+kthread_entry()
+{
+  struct proc *p = myproc();
+
+  // 释放 proc.c:allocproc() 中持有的 p->lock
+  // 否则 kthread_func 尝试 sleep 或 exit 时会死锁
+  release(&p->lock);
+
+  // 执行真正的内核线程函数
+  if(p->kthread_func) {
+    p->kthread_func(p->kthread_arg);
+  }
+
+  // 线程函数返回后，自动退出
+  // 注意：kthread 的退出需要修改 exit()
+  kexit(0);
+}
+
+struct proc* kthread_create(void (*func)(void *), void *arg, char *name)
+{
+  struct proc *p;
+
+  // 1. 分配一个 proc 结构体
+  p = allocproc();
+  if(p == 0)
+    return 0;
+
+  // 2. 设置为内核线程
+  p->is_kthread = 1;
+  p->kthread_func = func;
+  p->kthread_arg = arg;
+  safestrcpy(p->name, name, sizeof(p->name));
+
+  // 3. 内核线程没有用户页表
+  // allocproc() 默认创建了内核页表 (p->pagetable = proc_pagetable(p))
+  // 我们不需要用户映射，所以 p->sz 保持为 0
+  p->sz = 0; 
+  // 也不需要 p->pagetable = proc_pagetable(p) 之后的用户空间设置
+
+  // 4. 设置内核栈和上下文
+  // kstack 已经在 allocproc() 中分配
+  // 我们需要伪造一个 trapframe，以便 "返回" 到内核函数
+  
+  // 清空 trapframe
+  memset(p->trapframe, 0, sizeof(struct trapframe));
+
+  // 5. 设置执行入口 (epc)
+  // 当 kthread 第一次被调度时，swtch() 会返回到 kthread_entry
+  // 我们设置一个 "引导" 函数 kthread_entry，由它来调用真正的线程函数
+  
+  // swtch() 返回时会执行 ra (return address)
+  // 我们将 ra 设置为 kthread_entry
+  p->context.ra = (uint64)kthread_entry;
+  
+  // swtch() 会加载 kstack 作为栈顶
+  p->context.sp = p->kstack + PGSIZE;
+
+  // 6. 设置为 RUNNABLE 状态，等待调度器调度
+  acquire(&p->lock);
+  p->state = RUNNABLE;
+  release(&p->lock);
+
+  return p;
 }

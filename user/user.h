@@ -1,3 +1,8 @@
+#ifdef LAB_MMAP
+typedef unsigned long size_t;
+typedef long int off_t;
+#endif
+
 #define SBRK_ERROR ((char *)-1)
 
 struct stat;
@@ -25,6 +30,25 @@ char* sys_sbrk(int,int);
 int pause(int);
 int uptime(void);
 int symlink(const char*, const char*);
+int signal(int signum, void (*handler)(int));
+int sigsend(int pid, int signum);
+int sigreturn(void);
+#ifdef LAB_NET
+int bind(uint16);
+int unbind(uint16);
+int send(uint16, uint32, uint16, char *, uint32);
+int recv(uint16, uint32*, uint16*, char *, uint32);
+#endif
+#ifdef LAB_PGTBL
+int ugetpid(void);
+uint64 pgpte(void*);
+void kpgtbl(void);
+#endif
+char* mmap(void* addr, int len, int prot, int flags, int fd, int offset);
+int munmap(void* addr, int len);
+int shutdown(void);
+void* slab_alloc(int size);
+int slab_free(void* ptr);
 
 // ulib.c
 int stat(const char*, struct stat*);
@@ -40,6 +64,9 @@ int memcmp(const void *, const void *, uint);
 void *memcpy(void *, const void *, uint);
 char* sbrk(int);
 char* sbrklazy(int);
+#ifdef LAB_LOCK
+int statistics(void*, int);
+#endif
 
 // printf.c
 void fprintf(int, const char*, ...) __attribute__ ((format (printf, 2, 3)));
