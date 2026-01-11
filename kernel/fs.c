@@ -439,6 +439,42 @@ bmap(struct inode *ip, uint bn)
     brelse(bp);
     return addr;
   }
+  
+  bn -= NINDIRECT;
+
+  if(bn < NINDIRECT * NINDIRECT){
+    // Load double indirect block, allocating if necessary.
+    if((addr = ip->addrs[NDIRECT+1]) == 0){
+      addr = balloc(ip->dev);
+      if(addr == 0)
+        return 0;
+      ip->addrs[NDIRECT+1] = addr;
+    }
+    bp = bread(ip->dev, addr);
+    a = (uint*)bp->data;
+    if((addr = a[bn / NINDIRECT]) == 0){
+      addr = balloc(ip->dev);
+      if(addr){
+        a[bn / NINDIRECT] = addr;
+        log_write(bp);
+      }
+    }
+    brelse(bp);
+    if(addr == 0)
+      return 0;
+      
+    bp = bread(ip->dev, addr);
+    a = (uint*)bp->data;
+    if((addr = a[bn % NINDIRECT]) == 0){
+      addr = balloc(ip->dev);
+      if(addr){
+        a[bn % NINDIRECT] = addr;
+        log_write(bp);
+      }
+    }
+    brelse(bp);
+    return addr;
+  }
 
   panic("bmap: out of range");
 }
@@ -469,6 +505,26 @@ itrunc(struct inode *ip)
     brelse(bp);
     bfree(ip->dev, ip->addrs[NDIRECT]);
     ip->addrs[NDIRECT] = 0;
+  }
+
+  if(ip->addrs[NDIRECT+1]){
+    bp = bread(ip->dev, ip->addrs[NDIRECT+1]);
+    a = (uint*)bp->data;
+    for(j = 0; j < NINDIRECT; j++){
+      if(a[j]){
+        struct buf *bp2 = bread(ip->dev, a[j]);
+        uint *a2 = (uint*)bp2->data;
+        for(int k = 0; k < NINDIRECT; k++){
+          if(a2[k])
+            bfree(ip->dev, a2[k]);
+        }
+        brelse(bp2);
+        bfree(ip->dev, a[j]);
+      }
+    }
+    brelse(bp);
+    bfree(ip->dev, ip->addrs[NDIRECT+1]);
+    ip->addrs[NDIRECT+1] = 0;
   }
 
   ip->size = 0;
@@ -584,7 +640,17 @@ writei(struct inode *ip, int user_src, uint64 src, uint off, uint n)
 int
 namecmp(const char *s, const char *t)
 {
-  return strncmp(s, t, DIRSIZ);
+  int i = 0;
+  while(s[i] && t[i]){
+    if(s[i] != t[i])
+      return 1;
+    i++;
+    if(i >= MAXPATH)
+      break;
+  }
+  if(s[i] == 0 && t[i] == 0)
+    return 0;
+  return 1;
 }
 
 // Look for a directory entry in a directory.
@@ -594,6 +660,8 @@ dirlookup(struct inode *dp, char *name, uint *poff)
 {
   uint off, inum;
   struct dirent de;
+  char lname[MAXPATH];
+  int lpos = 0;
 
   if(dp->type != T_DIR)
     panic("dirlookup not DIR");
@@ -603,12 +671,29 @@ dirlookup(struct inode *dp, char *name, uint *poff)
       panic("dirlookup read");
     if(de.inum == 0)
       continue;
-    if(namecmp(name, de.name) == 0){
-      // entry matches path element
-      if(poff)
-        *poff = off;
-      inum = de.inum;
-      return iget(dp->dev, inum);
+    if(de.inum == 0xFFFF){
+      if(lpos + DIRSIZ >= MAXPATH)
+        continue;
+      memmove(lname + lpos, de.name, DIRSIZ);
+      lpos += DIRSIZ;
+      continue;
+    }
+    if(lpos > 0){
+      lname[lpos] = 0;
+      if(namecmp(name, lname) == 0){
+        if(poff)
+          *poff = off;
+        inum = de.inum;
+        return iget(dp->dev, inum);
+      }
+      lpos = 0;
+    } else {
+      if(namecmp(name, de.name) == 0){
+        if(poff)
+          *poff = off;
+        inum = de.inum;
+        return iget(dp->dev, inum);
+      }
     }
   }
 
@@ -620,9 +705,10 @@ dirlookup(struct inode *dp, char *name, uint *poff)
 int
 dirlink(struct inode *dp, char *name, uint inum)
 {
-  int off;
+  int off, need, run, start;
   struct dirent de;
   struct inode *ip;
+  int nlen;
 
   // Check that name is not present.
   if((ip = dirlookup(dp, name, 0)) != 0){
@@ -630,19 +716,59 @@ dirlink(struct inode *dp, char *name, uint inum)
     return -1;
   }
 
-  // Look for an empty dirent.
+  nlen = strlen(name);
+  if(nlen <= DIRSIZ){
+    for(off = 0; off < dp->size; off += sizeof(de)){
+      if(readi(dp, 0, (uint64)&de, off, sizeof(de)) != sizeof(de))
+        panic("dirlink read");
+      if(de.inum == 0)
+        break;
+    }
+
+    strncpy(de.name, name, DIRSIZ);
+    de.inum = inum;
+    if(writei(dp, 0, (uint64)&de, off, sizeof(de)) != sizeof(de))
+      return -1;
+    return 0;
+  }
+
+  need = (nlen + DIRSIZ - 1) / DIRSIZ + 1;
+  run = 0;
+  start = -1;
   for(off = 0; off < dp->size; off += sizeof(de)){
     if(readi(dp, 0, (uint64)&de, off, sizeof(de)) != sizeof(de))
       panic("dirlink read");
-    if(de.inum == 0)
-      break;
+    if(de.inum == 0){
+      if(run == 0)
+        start = off;
+      run++;
+      if(run >= need)
+        break;
+    } else {
+      run = 0;
+      start = -1;
+    }
   }
-
-  strncpy(de.name, name, DIRSIZ);
+  if(run < need){
+    start = dp->size;
+  }
+  for(int i = 0; i < need - 1; i++){
+    memset(&de, 0, sizeof(de));
+    de.inum = 0xFFFF;
+    int chunk = DIRSIZ;
+    int pos = i * DIRSIZ;
+    if(pos + chunk > nlen)
+      chunk = nlen - pos;
+    memset(de.name, 0, DIRSIZ);
+    memmove(de.name, name + pos, chunk);
+    if(writei(dp, 0, (uint64)&de, start + i * sizeof(de), sizeof(de)) != sizeof(de))
+      return -1;
+  }
+  memset(&de, 0, sizeof(de));
   de.inum = inum;
-  if(writei(dp, 0, (uint64)&de, off, sizeof(de)) != sizeof(de))
+  de.name[0] = 0;
+  if(writei(dp, 0, (uint64)&de, start + (need - 1) * sizeof(de), sizeof(de)) != sizeof(de))
     return -1;
-
   return 0;
 }
 
@@ -674,12 +800,10 @@ skipelem(char *path, char *name)
   while(*path != '/' && *path != 0)
     path++;
   len = path - s;
-  if(len >= DIRSIZ)
-    memmove(name, s, DIRSIZ);
-  else {
-    memmove(name, s, len);
-    name[len] = 0;
-  }
+  if(len >= MAXPATH - 1)
+    len = MAXPATH - 1;
+  memmove(name, s, len);
+  name[len] = 0;
   while(*path == '/')
     path++;
   return path;
@@ -727,7 +851,7 @@ namex(char *path, int nameiparent, char *name)
 struct inode*
 namei(char *path)
 {
-  char name[DIRSIZ];
+  char name[MAXPATH];
   return namex(path, 0, name);
 }
 

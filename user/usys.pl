@@ -42,6 +42,7 @@ entry("getpid");
 entry("sbrk");
 entry("pause");
 entry("uptime");
+entry("symlink");
 entry("signal");
 entry("sigsend");
 entry("sigreturn");

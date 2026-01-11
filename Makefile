@@ -201,6 +201,10 @@ UPROGS=\
 	$U/_logstress\
 	$U/_forphan\
 	$U/_dorphan\
+	$U/_bigwrite\
+	$U/_symlinktest\
+	$U/_longnametest\
+	$U/_hardlinktest\
 	$U/_sigdemo\
 	$U/_sigsend\
 	$U/_slabtest\
