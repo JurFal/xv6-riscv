@@ -113,6 +113,8 @@ extern uint64 sys_sigreturn(void);
 extern uint64 sys_shutdown(void);
 extern uint64 sys_slab_alloc(void);
 extern uint64 sys_slab_free(void);
+extern uint64 sys_amemcpy(void);
+extern uint64 sys_csync(void);
 
 #ifdef LAB_NET
 extern uint64 sys_bind(void);
@@ -168,6 +170,8 @@ static uint64 (*syscalls[])(void) = {
 [SYS_shutdown] sys_shutdown,
 [SYS_slab_alloc] sys_slab_alloc,
 [SYS_slab_free] sys_slab_free,
+[SYS_amemcpy] sys_amemcpy,
+[SYS_csync] sys_csync,
 };
 
 

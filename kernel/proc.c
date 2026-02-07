@@ -347,14 +347,14 @@ kfork(void)
 #ifdef LAB_PGTBL
   int vma_cnt = 0;
   for(i=0;i<NVMA;i++) if(np->vmas[i].used) vma_cnt++;
-  printf("kfork: parent pid=%d child pid=%d mmap_base=0x%p vmas=%d\n", p->pid, np->pid, (void*)np->mmap_base, vma_cnt);
-  for(i=0;i<NVMA;i++){
-    if(np->vmas[i].used){
-      printf("  child vma[%d]: addr=0x%p len=%lu prot=0x%x flags=0x%x ip->size=%d\n",
-             i, (void*)np->vmas[i].addr, np->vmas[i].len, np->vmas[i].prot, np->vmas[i].flags,
-             np->vmas[i].f ? np->vmas[i].f->ip->size : -1);
-    }
-  }
+  // printf("kfork: parent pid=%d child pid=%d mmap_base=0x%p vmas=%d\n", p->pid, np->pid, (void*)np->mmap_base, vma_cnt);
+  // for(i=0;i<NVMA;i++){
+  //   if(np->vmas[i].used){
+  //     printf("  child vma[%d]: addr=0x%p len=%lu prot=0x%x flags=0x%x ip->size=%d\n",
+  //            i, (void*)np->vmas[i].addr, np->vmas[i].len, np->vmas[i].prot, np->vmas[i].flags,
+  //            np->vmas[i].f ? np->vmas[i].f->ip->size : -1);
+  //   }
+  // }
 #endif
 
   safestrcpy(np->name, p->name, sizeof(p->name));
@@ -853,7 +853,6 @@ struct proc* kthread_create(void (*func)(void *), void *arg, char *name)
   p->context.sp = p->kstack + PGSIZE;
 
   // 6. 设置为 RUNNABLE 状态，等待调度器调度
-  acquire(&p->lock);
   p->state = RUNNABLE;
   release(&p->lock);
 

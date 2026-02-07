@@ -57,3 +57,5 @@ entry("munmap");
 entry("shutdown");
 entry("slab_alloc");
 entry("slab_free");
+entry("amemcpy");
+entry("csync");

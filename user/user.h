@@ -49,6 +49,8 @@ int munmap(void* addr, int len);
 int shutdown(void);
 void* slab_alloc(int size);
 int slab_free(void* ptr);
+int amemcpy(void *dst, void *src, int len);
+int csync(void *addr, int len);
 
 // ulib.c
 int stat(const char*, struct stat*);

@@ -30,6 +30,7 @@ main()
     fileinit();      // file table
     virtio_disk_init(); // emulated hard disk
     userinit();      // first user process
+    copier_init();   // initialize copier service
     __sync_synchronize();
     started = 1;
   } else {

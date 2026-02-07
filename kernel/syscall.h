@@ -38,3 +38,5 @@
 #define SYS_shutdown 37
 #define SYS_slab_alloc 38
 #define SYS_slab_free 39
+#define SYS_amemcpy 40
+#define SYS_csync 41
