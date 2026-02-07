@@ -419,8 +419,8 @@ uvmalloc(pagetable_t pagetable, uint64 oldsz, uint64 newsz, int xperm)
 #ifndef LAB_SYSCALL
         memset(mem_b, 0, PGSIZE);
 #endif
-        printf("uvmalloc: mappages of address: %lu\n", addr);
-        if(mappages(pagetable, addr, PGSIZE, (uint64)mem_b, PTE_R|xperm) != 0){
+        // printf("uvmalloc: mappages of address: %lu\n", addr);
+        if(mappages(pagetable, addr, PGSIZE, (uint64)mem_b, PTE_R|PTE_U|xperm) != 0){
           kfree(mem_b);
           uvmdealloc(pagetable, addr, oldsz);
           return 0;
@@ -474,7 +474,7 @@ uvmalloc(pagetable_t pagetable, uint64 oldsz, uint64 newsz, int xperm)
 #ifndef LAB_SYSCALL
       memset(smem, 0, SUPERPGSIZE);
 #endif
-      if(mappages_super(pagetable, superpage_start, SUPERPGSIZE, (uint64)smem, PTE_R|xperm) != 0){
+      if(mappages_super(pagetable, superpage_start, SUPERPGSIZE, (uint64)smem, PTE_R|PTE_U|xperm) != 0){
         superfree(smem);
         uvmdealloc(pagetable, superpage_start, oldsz);
         return 0;
@@ -505,7 +505,7 @@ uvmalloc(pagetable_t pagetable, uint64 oldsz, uint64 newsz, int xperm)
 #ifndef LAB_SYSCALL
     memset(mem, 0, sz);
 #endif
-    printf("uvmalloc: mappages of address: %lu\n", a);
+    // printf("uvmalloc: mappages of address: %lu\n", a);
     if(mappages(pagetable, a, sz, (uint64)mem, PTE_R|PTE_U|xperm) != 0){
       kfree(mem);
       uvmdealloc(pagetable, a, oldsz);
@@ -647,7 +647,7 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
     if((mem = kalloc()) == 0)
       goto err;
     memmove(mem, (char*)pa, PGSIZE);
-    printf("uvmcopy: mappages of address: %lu\n", i);
+    // printf("uvmcopy: mappages of address: %lu\n", i);
     if(mappages(new, i, PGSIZE, (uint64)mem, flags) != 0){
       kfree(mem);
       goto err;
